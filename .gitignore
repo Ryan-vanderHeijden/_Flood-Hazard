@@ -1,0 +1,40 @@
+# Data outputs (large files, not version-controlled)
+code/pipeline/data/
+
+# Folders
+meeting_notes/
+memory/
+
+# Files
+Project_Description.pdf
+dashboard.html
+CLAUDE.md
+TASKS.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Sensitive / personal
+*.env
+secrets.*
