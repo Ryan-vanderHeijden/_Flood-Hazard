@@ -4,6 +4,7 @@ code/nwis_pipeline/data/
 # Folders
 meeting_notes/
 memory/
+.claude/
 
 # Files
 Project_Description.pdf
