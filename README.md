@@ -55,10 +55,12 @@ python run_pipeline.py
 |---|---------|--------|--------|
 | 1 | Site metadata | USGS NWIS | `data/metadata/site_info.parquet` |
 | 2 | Daily streamflow & stage | USGS NWIS | `data/streamflow/streamflow.parquet` |
-| 3 | Flood stage thresholds | NOAA / NWS | `data/metadata/flood_stages.parquet` |
+| 3 | Flood stage thresholds | NWS NWPS API | `data/metadata/flood_stages.parquet` |
 | 4 | Data coverage summary | — | `data/metadata/data_coverage.parquet` |
 
 Date ranges are derived automatically from each gage's NWIS period of record — no hardcoded start/end dates.
+
+Flood stage thresholds (Service 3) are fetched from the [NWS National Water Prediction Service API](https://api.water.noaa.gov/nwps/v1/gauges). Each USGS site is spatially matched to its nearest NWS gauge; the match is verified against the NWS `usgsId` field. Only gages with observed stage data are queried.
 
 ### Inspect outputs
 
@@ -70,4 +72,4 @@ Open `code/nwis_pipeline/inspect_outputs.ipynb` in Jupyter to explore the fetche
 
 - Python 3.10+
 - [`dataretrieval`](https://github.com/DOI-USGS/dataretrieval-python) — USGS NWIS API wrapper
-- `pandas`, `pyarrow`, `requests`
+- `pandas`, `pyarrow`, `requests`, `numpy`

@@ -134,8 +134,20 @@ def main():
     logger.info("=" * 60)
     logger.info("SERVICE 3: Flood stage thresholds")
     logger.info("=" * 60)
+    # Only fetch flood stages for sites that have observed stage (gage height) data.
+    if not streamflow_df.empty and "stage_ft" in streamflow_df.columns:
+        has_stage = (
+            streamflow_df.groupby("site_no")["stage_ft"]
+            .apply(lambda s: s.notna().any())
+        )
+        stage_gage_ids = has_stage[has_stage].index.tolist()
+    else:
+        stage_gage_ids = []
+    logger.info("%d/%d gages have stage data", len(stage_gage_ids), len(gage_ids))
+
     flood_stages = fetch_flood_stages(
-        gage_ids=gage_ids,
+        gage_ids=stage_gage_ids,
+        site_info=site_info,
         out_path=DATA_DIR / "metadata",
     )
 

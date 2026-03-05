@@ -1,123 +1,239 @@
 """
-Service 3: Fetch USGS flood stage thresholds for each gage.
+Service 3: Fetch NWS flood stage thresholds for each gage.
 
 Thresholds retrieved (where available):
-  action_stage    — Stage at which NWS/USGS issues an action alert (ft)
+  action_stage    — Stage at which NWS issues an action alert (ft)
   flood_stage     — Stage at which minor flooding begins (ft)
   moderate_stage  — Stage at which moderate flooding begins (ft)
   major_stage     — Stage at which major flooding begins (ft)
 
-These are fetched from the NWIS site service with siteOutput=expanded.
-Not all gages have assigned thresholds; missing values are left as NaN.
+Data source: NWS National Water Prediction Service (NWPS) API
+  https://api.water.noaa.gov/nwps/v1/gauges
+
+Strategy:
+  1. Fetch all NWPS gauge locations (bulk endpoint, ~12 k gauges).
+  2. Spatially match each target USGS site to its nearest NWPS gauge
+     using a Euclidean-degree distance threshold.
+  3. Parallel-fetch individual NWPS records for matched gauges.
+  4. Verify the NWPS usgsId field matches the USGS site number.
+  5. Extract flood category stage values.
+
+Note: Only sites with observed stage data need flood stage thresholds;
+  the pipeline passes only those sites (has_stage_data == True in
+  data_coverage.parquet).
 
 Output: data/metadata/flood_stages.parquet
 """
 
-import io
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import requests
 
 logger = logging.getLogger(__name__)
 
-NWIS_SITE_URL = "https://waterservices.usgs.gov/nwis/site/"
+NWPS_BASE = "https://api.water.noaa.gov/nwps/v1/gauges"
 
-# Mapping from NWIS RDB column names → readable names.
-# The exact column names vary; we try several known variants.
-STAGE_COLS = {
-    "action_stage": "action_stage_ft",
-    "flood_stage": "flood_stage_ft",
-    "moderate_flood_stage": "moderate_stage_ft",
-    "major_flood_stage": "major_stage_ft",
-}
+# Maximum Euclidean distance (degrees) for a spatial match to be accepted.
+# ~0.05° ≈ 5 km — generous enough to account for coordinate rounding.
+MAX_DIST_DEG = 0.05
 
-# NWIS allows up to ~100 sites per request; batch to be safe
-BATCH_SIZE = 50
+# Concurrent workers for individual NWPS gauge record fetches.
+MAX_WORKERS = 20
 
 
-def _parse_rdb(text: str) -> pd.DataFrame:
-    """Parse NWIS RDB (tab-separated with two-line header) into a DataFrame."""
-    lines = text.splitlines()
-    data_lines = [l for l in lines if not l.startswith("#")]
-    if len(data_lines) < 2:
-        return pd.DataFrame()
-    # First non-comment line = headers, second = type codes (skip), rest = data
-    header = data_lines[0]
-    body = "\n".join([header] + data_lines[2:])
-    return pd.read_csv(io.StringIO(body), sep="\t", dtype=str, low_memory=False)
-
-
-def _fetch_batch(site_nos: list[str]) -> pd.DataFrame:
-    params = {
-        "format": "rdb",
-        "sites": ",".join(site_nos),
-        "siteOutput": "expanded",
-    }
-    resp = requests.get(NWIS_SITE_URL, params=params, timeout=30)
+def _fetch_nwps_bulk() -> pd.DataFrame:
+    """Fetch all NWPS gauge LIDs with coordinates (single bulk request)."""
+    resp = requests.get(NWPS_BASE, timeout=60)
     resp.raise_for_status()
-    return _parse_rdb(resp.text)
+    gauges = resp.json().get("gauges", [])
+    return pd.DataFrame(
+        [
+            {"lid": g["lid"], "lat": g["latitude"], "lon": g["longitude"]}
+            for g in gauges
+            if "latitude" in g and "longitude" in g
+        ]
+    )
 
 
-def fetch_flood_stages(gage_ids: list[str], out_path: Path) -> pd.DataFrame:
+def _fetch_nwps_gauge(lid: str) -> dict | None:
+    """Fetch a single NWPS gauge record; return None on any failure."""
+    try:
+        resp = requests.get(f"{NWPS_BASE}/{lid}", timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException:
+        return None
+
+
+def _extract_stages(record: dict) -> dict:
+    """Extract flood category stage values from a NWPS gauge record."""
+    cats = record.get("flood", {}).get("categories", {})
+
+    def _stage(key: str) -> float:
+        val = cats.get(key, {}).get("stage")
+        if val is None:
+            return float("nan")
+        try:
+            f = float(val)
+        except (TypeError, ValueError):
+            return float("nan")
+        return float("nan") if f <= -9000 else f
+
+    return {
+        "action_stage_ft":   _stage("action"),
+        "flood_stage_ft":    _stage("minor"),
+        "moderate_stage_ft": _stage("moderate"),
+        "major_stage_ft":    _stage("major"),
+    }
+
+
+def fetch_flood_stages(
+    gage_ids: list[str],
+    site_info: pd.DataFrame,
+    out_path: Path,
+) -> pd.DataFrame:
     """
-    Fetch flood stage thresholds for all gages and save to Parquet.
+    Fetch NWS flood stage thresholds and save to Parquet.
 
     Args:
-        gage_ids: List of USGS site numbers (zero-padded strings).
-        out_path: Directory where flood_stages.parquet will be written.
+        gage_ids:  USGS site numbers to process (should be sites with
+                   observed stage data).
+        site_info: DataFrame with columns [site_no, latitude, longitude];
+                   used to spatially match USGS sites to NWPS gauges.
+        out_path:  Directory where flood_stages.parquet will be written.
 
     Returns:
         DataFrame with columns [site_no, action_stage_ft, flood_stage_ft,
-        moderate_stage_ft, major_stage_ft].
+        moderate_stage_ft, major_stage_ft].  Rows are present for every
+        entry in gage_ids; missing thresholds are NaN.
     """
-    logger.info("Fetching flood stage thresholds for %d gages", len(gage_ids))
+    stage_cols = ["action_stage_ft", "flood_stage_ft", "moderate_stage_ft", "major_stage_ft"]
+    empty = pd.DataFrame(columns=["site_no"] + stage_cols)
 
-    batches = [
-        gage_ids[i : i + BATCH_SIZE] for i in range(0, len(gage_ids), BATCH_SIZE)
-    ]
-    frames = []
-    for batch in batches:
-        try:
-            frames.append(_fetch_batch(batch))
-        except requests.RequestException as exc:
-            logger.error("NWIS request failed for batch %s: %s", batch, exc)
+    if not gage_ids:
+        return empty
 
-    if not frames:
-        logger.warning("No flood stage data retrieved.")
-        return pd.DataFrame(columns=["site_no"] + list(STAGE_COLS.values()))
+    logger.info("Fetching NWPS flood stages for %d gages", len(gage_ids))
 
-    raw = pd.concat(frames, ignore_index=True)
+    # ------------------------------------------------------------------
+    # Step 1: Fetch all NWPS gauge locations (one request, ~12 k gauges)
+    # ------------------------------------------------------------------
+    try:
+        nwps = _fetch_nwps_bulk()
+    except requests.RequestException as exc:
+        logger.error("Failed to fetch NWPS bulk gauge list: %s", exc)
+        return empty
 
-    # Normalise column names (lowercase, strip whitespace)
-    raw.columns = raw.columns.str.strip().str.lower()
+    logger.info("  NWPS bulk list: %d gauges", len(nwps))
 
-    # site_no column may be called 'site_no' or 'agency_cd'+'site_no'
-    if "site_no" not in raw.columns:
-        logger.error("Could not find site_no column in NWIS response.")
-        return pd.DataFrame(columns=["site_no"] + list(STAGE_COLS.values()))
+    # ------------------------------------------------------------------
+    # Step 2: Spatial nearest-neighbour match
+    # ------------------------------------------------------------------
+    targets = (
+        site_info[site_info["site_no"].isin(gage_ids)][
+            ["site_no", "latitude", "longitude"]
+        ]
+        .dropna(subset=["latitude", "longitude"])
+        .copy()
+    )
 
-    keep = ["site_no"] + [c for c in STAGE_COLS if c in raw.columns]
-    df = raw[keep].copy().rename(columns=STAGE_COLS)
+    if targets.empty:
+        logger.warning("No lat/lon available for target gages; cannot match to NWPS.")
+        return empty
 
-    # Ensure all threshold columns exist
-    for col in STAGE_COLS.values():
-        if col not in df.columns:
-            df[col] = pd.NA
+    # Euclidean distance in degree-space — sufficient for a threshold match.
+    # Shapes: site_coords (M, 2), nwps_coords (N, 2) → dists (M, N)
+    nwps_coords = nwps[["lat", "lon"]].values
+    site_coords = targets[["latitude", "longitude"]].values
 
-    # Coerce to numeric
-    for col in STAGE_COLS.values():
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+    dists = np.sqrt(
+        (site_coords[:, 0:1] - nwps_coords[:, 0]) ** 2
+        + (site_coords[:, 1:2] - nwps_coords[:, 1]) ** 2
+    )
 
-    n_with_flood = df["flood_stage_ft"].notna().sum()
-    n_with_action = df["action_stage_ft"].notna().sum()
+    best_idx = dists.argmin(axis=1)
+    best_dist = dists[np.arange(len(targets)), best_idx]
+
+    targets["lid"] = nwps.iloc[best_idx]["lid"].values
+    targets["dist"] = best_dist
+    matched = targets[targets["dist"] <= MAX_DIST_DEG].copy()
+
+    n_matched = len(matched)
+    n_no_match = len(targets) - n_matched
     logger.info(
-        "  Flood stage defined: %d/%d gages | Action stage defined: %d/%d gages",
-        n_with_flood,
-        len(df),
-        n_with_action,
-        len(df),
+        "  Spatially matched %d/%d gages to NWPS gauges (threshold %.3f°)",
+        n_matched, len(targets), MAX_DIST_DEG,
+    )
+    if n_no_match:
+        logger.info("  %d gages had no NWPS gauge within distance threshold", n_no_match)
+
+    if matched.empty:
+        logger.warning("No NWPS gauge matches found.")
+        return empty
+
+    # ------------------------------------------------------------------
+    # Step 3: Parallel-fetch individual NWPS records
+    # ------------------------------------------------------------------
+    lids = matched["lid"].unique().tolist()
+    logger.info("  Fetching individual records for %d NWPS gauges...", len(lids))
+
+    lid_records: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futures = {ex.submit(_fetch_nwps_gauge, lid): lid for lid in lids}
+        for fut in as_completed(futures):
+            lid = futures[fut]
+            record = fut.result()
+            if record:
+                lid_records[lid] = record
+
+    logger.info("  Retrieved %d/%d NWPS records", len(lid_records), len(lids))
+
+    # ------------------------------------------------------------------
+    # Step 4: Verify usgsId and extract stages
+    # ------------------------------------------------------------------
+    rows = []
+    for _, row in matched.iterrows():
+        record = lid_records.get(row["lid"])
+        if record is None:
+            continue
+
+        usgs_id = record.get("usgsId", "")
+        if not usgs_id:
+            # NWPS gauge has no associated USGS ID — cannot verify match
+            logger.debug(
+                "  LID %s has no usgsId (nearest to %s, dist %.4f°); skipping",
+                row["lid"], row["site_no"], row["dist"],
+            )
+            continue
+
+        if usgs_id.zfill(8) != str(row["site_no"]).zfill(8):
+            logger.debug(
+                "  LID %s: usgsId %s != site_no %s (dist %.4f°); skipping",
+                row["lid"], usgs_id, row["site_no"], row["dist"],
+            )
+            continue
+
+        stages = _extract_stages(record)
+        rows.append({"site_no": row["site_no"], **stages})
+
+    # ------------------------------------------------------------------
+    # Step 5: Build output — all gage_ids present, unmatched → NaN
+    # ------------------------------------------------------------------
+    df = pd.DataFrame(rows) if rows else empty.copy()
+    df = pd.DataFrame({"site_no": gage_ids}).merge(df, on="site_no", how="left")
+    for col in stage_cols:
+        if col not in df.columns:
+            df[col] = float("nan")
+
+    n_flood  = df["flood_stage_ft"].notna().sum()
+    n_action = df["action_stage_ft"].notna().sum()
+    logger.info(
+        "  Flood stage defined: %d/%d | Action stage defined: %d/%d",
+        n_flood, len(df), n_action, len(df),
     )
 
     out_path.mkdir(parents=True, exist_ok=True)

@@ -1,4 +1,5 @@
 dataretrieval
+numpy
 pandas
 pyarrow
 requests
