@@ -1,5 +1,5 @@
 # Data outputs (large files, not version-controlled)
-code/pipeline/data/
+code/nwis_pipeline/data/
 
 # Folders
 meeting_notes/

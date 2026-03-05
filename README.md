@@ -23,19 +23,19 @@ Key objectives:
 
 ```
 code/
-└── pipeline/       # Data acquisition pipeline (USGS NWIS)
+└── nwis_pipeline/  # Data acquisition pipeline (USGS NWIS)
 ```
 
 ---
 
-## Data Pipeline (`code/pipeline/`)
+## Data Pipeline (`code/nwis_pipeline/`)
 
 Fetches and organizes the observational data needed for threshold development. All data are pulled from public APIs (USGS NWIS, NOAA) and written to local Parquet files.
 
 ### Setup
 
 ```bash
-cd code/pipeline
+cd code/nwis_pipeline
 pip install -r requirements.txt
 ```
 
@@ -62,7 +62,7 @@ Date ranges are derived automatically from each gage's NWIS period of record —
 
 ### Inspect outputs
 
-Open `code/pipeline/inspect_outputs.ipynb` in Jupyter to explore the fetched data.
+Open `code/nwis_pipeline/inspect_outputs.ipynb` in Jupyter to explore the fetched data.
 
 ---
 
