@@ -43,7 +43,7 @@ def _normalize_site_df(raw_df: pd.DataFrame) -> pd.DataFrame:
     # NWIS may return multiple sensors for the same parameter; keep first occurrence
     dupes = df.columns[df.columns.duplicated(keep=False)].unique().tolist()
     if dupes:
-        site_no = raw_df.index.get_level_values("site_no")[0]
+        site_no = df["site_no"].iloc[0]
         logger.warning(
             "  %s: multiple sensors detected for %s — keeping first occurrence only",
             site_no, dupes,
