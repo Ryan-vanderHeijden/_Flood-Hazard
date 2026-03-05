@@ -40,6 +40,16 @@ def _normalize_site_df(raw_df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.rename(columns=col_map).rename(columns={"datetime": "date"})
 
+    # NWIS may return multiple sensors for the same parameter; keep first occurrence
+    dupes = df.columns[df.columns.duplicated(keep=False)].unique().tolist()
+    if dupes:
+        site_no = raw_df.index.get_level_values("site_no")[0]
+        logger.warning(
+            "  %s: multiple sensors detected for %s — keeping first occurrence only",
+            site_no, dupes,
+        )
+    df = df.loc[:, ~df.columns.duplicated()]
+
     for col in ("discharge_cfs", "discharge_cd", "stage_ft", "stage_cd"):
         if col not in df.columns:
             df[col] = pd.NA
