@@ -60,6 +60,13 @@ python run_pipeline.py
 
 Date ranges are derived automatically from each gage's NWIS period of record — no hardcoded start/end dates.
 
+**Service 2 — stage fetch strategy (two-pass):**
+NWIS only stores pre-computed daily means for stage (00065) at older/legacy gauges (~542 of ~1,946 in the current config). Modern gauges record stage as 15-minute instantaneous values (unit values, `uv`) with no daily mean stored.
+
+To maximise stage coverage, Service 2 uses two passes:
+1. **Pass 1 — daily values (`get_dv`):** fast; picks up all gauges with a native daily mean.
+2. **Pass 2 — IV fallback (`get_iv`):** for sites still lacking stage after Pass 1, fetches the raw 15-min series and computes daily means. Requests are batched (10 sites × 5-year windows). These rows are tagged `stage_cd = "iv_mean"` to distinguish them from native daily means.
+
 Flood stage thresholds (Service 3) are fetched from the [NWS National Water Prediction Service API](https://api.water.noaa.gov/nwps/v1/gauges). Each USGS site is spatially matched to its nearest NWS gauge; the match is verified against the NWS `usgsId` field. Only gages with observed stage data are queried.
 
 ### Inspect outputs
