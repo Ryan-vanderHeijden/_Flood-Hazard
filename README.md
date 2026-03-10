@@ -55,7 +55,7 @@ python run_pipeline.py
 |---|---------|--------|--------|
 | 1 | Site metadata | USGS NWIS | `data/metadata/site_info.parquet` |
 | 2 | Daily streamflow & stage | USGS NWIS | `data/streamflow/streamflow.parquet` |
-| 3 | Flood stage thresholds | NWS NWPS API | `data/metadata/flood_stages.parquet` |
+| 3 | Flood stage thresholds | NWS NWPS API | `data/metadata/flood_stages.parquet`, `data/metadata/gauge_map.parquet` |
 | 4 | Data coverage summary | — | `data/metadata/data_coverage.parquet` |
 
 Date ranges are derived automatically from each gage's NWIS period of record — no hardcoded start/end dates.
@@ -69,7 +69,10 @@ To maximise stage coverage, Service 2 uses two passes — both parallelized with
 
 Both passes write checkpoint files to `data/streamflow/` so a re-run after a crash resumes from where it left off rather than re-fetching all data. Delete `streamflow_dv_checkpoint.parquet`, `streamflow_iv_checkpoint.parquet`, and the `*_no_data.txt` files to force a full re-fetch.
 
-Flood stage thresholds (Service 3) are fetched from the [NWS National Water Prediction Service API](https://api.water.noaa.gov/nwps/v1/gauges) using 50 parallel workers. Each USGS site is spatially matched to its nearest NWS gauge; the match is verified against the NWS `usgsId` field. Only gages with observed stage data are queried.
+Flood stage thresholds (Service 3) are fetched from the [NWS National Water Prediction Service API](https://api.water.noaa.gov/nwps/v1/gauges) using 50 parallel workers. Each USGS site is spatially matched to its nearest NWS gauge; the match is verified against the NWS `usgsId` field. Only gages with observed stage data are queried. Two files are written:
+
+- **`flood_stages.parquet`** — stage (ft) and flow (cfs) thresholds for action/minor/moderate/major categories, plus NWS impact statements for each category.
+- **`gauge_map.parquet`** — maps each USGS `site_no` to its NWS LID and NWM `reach_id`.
 
 ### Inspect outputs
 

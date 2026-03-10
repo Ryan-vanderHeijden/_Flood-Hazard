@@ -6,6 +6,11 @@ Thresholds retrieved (where available):
   flood_stage     — Stage at which minor flooding begins (ft)
   moderate_stage  — Stage at which moderate flooding begins (ft)
   major_stage     — Stage at which major flooding begins (ft)
+  action_flow     — Discharge at action stage (cfs)
+  flood_flow      — Discharge at minor flood stage (cfs)
+  moderate_flow   — Discharge at moderate flood stage (cfs)
+  major_flow      — Discharge at major flood stage (cfs)
+  *_impact        — NWS impact statement for each flood category
 
 Data source: NWS National Water Prediction Service (NWPS) API
   https://api.water.noaa.gov/nwps/v1/gauges
@@ -16,13 +21,15 @@ Strategy:
      using a Euclidean-degree distance threshold.
   3. Parallel-fetch individual NWPS records for matched gauges.
   4. Verify the NWPS usgsId field matches the USGS site number.
-  5. Extract flood category stage values.
+  5. Extract flood category stage/flow values and impact statements.
 
 Note: Only sites with observed stage data need flood stage thresholds;
   the pipeline passes only those sites (has_stage_data == True in
   data_coverage.parquet).
 
-Output: data/metadata/flood_stages.parquet
+Outputs:
+  data/metadata/flood_stages.parquet  — stage/flow thresholds + impact statements
+  data/metadata/gauge_map.parquet     — USGS site_no ↔ NWS LID ↔ NWM reachId
 """
 
 import logging
@@ -70,24 +77,46 @@ def _fetch_nwps_gauge(lid: str) -> dict | None:
 
 
 def _extract_stages(record: dict) -> dict:
-    """Extract flood category stage values from a NWPS gauge record."""
+    """Extract flood category stage/flow values and impact statements from a NWPS gauge record."""
     cats = record.get("flood", {}).get("categories", {})
 
-    def _stage(key: str) -> float:
-        val = cats.get(key, {}).get("stage")
-        if val is None:
+    def _val(key: str, field: str) -> float:
+        v = cats.get(key, {}).get(field)
+        if v is None:
             return float("nan")
         try:
-            f = float(val)
+            f = float(v)
         except (TypeError, ValueError):
             return float("nan")
         return float("nan") if f <= -9000 else f
 
+    # Build stage→impact statement lookup from the impacts array.
+    stage_to_impact: dict[float, str] = {}
+    for item in record.get("flood", {}).get("impacts", []):
+        s = item.get("stage")
+        stmt = item.get("statement", "").strip()
+        if s is not None and stmt:
+            stage_to_impact[float(s)] = stmt
+
+    def _impact(key: str) -> str | None:
+        stage_val = _val(key, "stage")
+        if np.isnan(stage_val):
+            return None
+        return stage_to_impact.get(stage_val)
+
     return {
-        "action_stage_ft":   _stage("action"),
-        "flood_stage_ft":    _stage("minor"),
-        "moderate_stage_ft": _stage("moderate"),
-        "major_stage_ft":    _stage("major"),
+        "action_stage_ft":   _val("action",   "stage"),
+        "flood_stage_ft":    _val("minor",    "stage"),
+        "moderate_stage_ft": _val("moderate", "stage"),
+        "major_stage_ft":    _val("major",    "stage"),
+        "action_flow_cfs":   _val("action",   "flow"),
+        "flood_flow_cfs":    _val("minor",    "flow"),
+        "moderate_flow_cfs": _val("moderate", "flow"),
+        "major_flow_cfs":    _val("major",    "flow"),
+        "action_impact":     _impact("action"),
+        "flood_impact":      _impact("minor"),
+        "moderate_impact":   _impact("moderate"),
+        "major_impact":      _impact("major"),
     }
 
 
@@ -108,10 +137,18 @@ def fetch_flood_stages(
 
     Returns:
         DataFrame with columns [site_no, action_stage_ft, flood_stage_ft,
-        moderate_stage_ft, major_stage_ft].  Rows are present for every
-        entry in gage_ids; missing thresholds are NaN.
+        moderate_stage_ft, major_stage_ft, action_flow_cfs, flood_flow_cfs,
+        moderate_flow_cfs, major_flow_cfs, action_impact, flood_impact,
+        moderate_impact, major_impact].  Rows are present for every entry
+        in gage_ids; missing values are NaN / None.
+
+        Also writes gauge_map.parquet [site_no, lid, reach_id] to out_path.
     """
-    stage_cols = ["action_stage_ft", "flood_stage_ft", "moderate_stage_ft", "major_stage_ft"]
+    stage_cols = [
+        "action_stage_ft", "flood_stage_ft", "moderate_stage_ft", "major_stage_ft",
+        "action_flow_cfs",  "flood_flow_cfs",  "moderate_flow_cfs",  "major_flow_cfs",
+        "action_impact",    "flood_impact",    "moderate_impact",    "major_impact",
+    ]
     empty = pd.DataFrame(columns=["site_no"] + stage_cols)
 
     if not gage_ids:
@@ -196,6 +233,7 @@ def fetch_flood_stages(
     # Step 4: Verify usgsId and extract stages
     # ------------------------------------------------------------------
     rows = []
+    gauge_map_rows = []
     for _, row in matched.iterrows():
         record = lid_records.get(row["lid"])
         if record is None:
@@ -220,6 +258,15 @@ def fetch_flood_stages(
         stages = _extract_stages(record)
         rows.append({"site_no": row["site_no"], **stages})
 
+        reach_id = record.get("reachId", "")
+        if isinstance(reach_id, str):
+            reach_id = reach_id.strip() or None
+        gauge_map_rows.append({
+            "site_no":  row["site_no"],
+            "lid":      row["lid"],
+            "reach_id": reach_id,
+        })
+
     # ------------------------------------------------------------------
     # Step 5: Build output — all gage_ids present, unmatched → NaN
     # ------------------------------------------------------------------
@@ -237,8 +284,18 @@ def fetch_flood_stages(
     )
 
     out_path.mkdir(parents=True, exist_ok=True)
+
     parquet_file = out_path / "flood_stages.parquet"
     df.to_parquet(parquet_file, index=False)
     logger.info("Saved %d rows → %s", len(df), parquet_file)
+
+    gauge_map_df = (
+        pd.DataFrame(gauge_map_rows)
+        if gauge_map_rows
+        else pd.DataFrame(columns=["site_no", "lid", "reach_id"])
+    )
+    gauge_map_file = out_path / "gauge_map.parquet"
+    gauge_map_df.to_parquet(gauge_map_file, index=False)
+    logger.info("Saved %d rows → %s", len(gauge_map_df), gauge_map_file)
 
     return df
