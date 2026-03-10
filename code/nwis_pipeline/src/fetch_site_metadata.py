@@ -14,6 +14,7 @@ Output: data/metadata/site_info.parquet
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pandas as pd
@@ -23,6 +24,9 @@ logger = logging.getLogger(__name__)
 
 # NWIS site service has practical URL-length limits; batch to be safe
 BATCH_SIZE = 100
+
+# Parallel workers for batch requests
+_META_MAX_WORKERS = 10
 
 # NWIS → readable column names
 RENAME = {
@@ -36,6 +40,26 @@ RENAME = {
 }
 
 
+def _fetch_info_batch(batch: list[str]) -> pd.DataFrame | None:
+    """Fetch basic site attributes for one batch."""
+    try:
+        df, _ = nwis.get_info(sites=batch)
+        return df if not df.empty else None
+    except Exception as exc:
+        logger.error("get_info failed for batch starting %s: %s", batch[0], exc)
+        return None
+
+
+def _fetch_catalog_batch(batch: list[str]) -> pd.DataFrame | None:
+    """Fetch series catalog (period-of-record) for one batch."""
+    try:
+        df, _ = nwis.get_info(sites=batch, seriesCatalogOutput=True)
+        return df if not df.empty else None
+    except Exception as exc:
+        logger.error("get_info (catalog) failed for batch starting %s: %s", batch[0], exc)
+        return None
+
+
 def fetch_site_metadata(gage_ids: list[str], out_path: Path) -> pd.DataFrame:
     """
     Fetch site metadata for all gages and save to Parquet.
@@ -47,20 +71,19 @@ def fetch_site_metadata(gage_ids: list[str], out_path: Path) -> pd.DataFrame:
     Returns:
         DataFrame with readable column names indexed by site_no.
     """
-    logger.info("Fetching site metadata for %d gages", len(gage_ids))
+    logger.info("Fetching site metadata for %d gages (workers=%d)", len(gage_ids), _META_MAX_WORKERS)
 
     batches = [gage_ids[i : i + BATCH_SIZE] for i in range(0, len(gage_ids), BATCH_SIZE)]
     logger.info("  Using %d batches of up to %d sites", len(batches), BATCH_SIZE)
 
-    # --- Basic site attributes ---
+    # --- Basic site attributes (parallelized) ---
     info_frames = []
-    for batch in batches:
-        try:
-            batch_df, _ = nwis.get_info(sites=batch)
-            if not batch_df.empty:
-                info_frames.append(batch_df)
-        except Exception as exc:
-            logger.error("get_info failed for batch starting %s: %s", batch[0], exc)
+    with ThreadPoolExecutor(max_workers=_META_MAX_WORKERS) as ex:
+        futures = {ex.submit(_fetch_info_batch, batch): batch for batch in batches}
+        for fut in as_completed(futures):
+            result = fut.result()
+            if result is not None:
+                info_frames.append(result)
 
     if not info_frames:
         logger.warning("No site metadata returned.")
@@ -72,15 +95,14 @@ def fetch_site_metadata(gage_ids: list[str], out_path: Path) -> pd.DataFrame:
     keep = ["site_no"] + [c for c in RENAME if c in df.columns]
     df = df[keep].rename(columns=RENAME)
 
-    # --- Discharge (00060) period of record ---
+    # --- Discharge (00060) period of record (parallelized) ---
     catalog_frames = []
-    for batch in batches:
-        try:
-            cat_batch, _ = nwis.get_info(sites=batch, seriesCatalogOutput=True)
-            if not cat_batch.empty:
-                catalog_frames.append(cat_batch)
-        except Exception as exc:
-            logger.error("get_info (catalog) failed for batch starting %s: %s", batch[0], exc)
+    with ThreadPoolExecutor(max_workers=_META_MAX_WORKERS) as ex:
+        futures = {ex.submit(_fetch_catalog_batch, batch): batch for batch in batches}
+        for fut in as_completed(futures):
+            result = fut.result()
+            if result is not None:
+                catalog_frames.append(result)
 
     if catalog_frames:
         catalog = pd.concat(catalog_frames).reset_index()

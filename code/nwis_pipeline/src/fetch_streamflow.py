@@ -13,11 +13,20 @@ Stage fetch strategy (two-pass):
      raw IV series and compute daily means ourselves.  These rows are marked
      stage_cd = "iv_mean" to distinguish them from native DV means.
 
+Performance notes:
+  - Pass 1 and Pass 2 are both parallelized with ThreadPoolExecutor.
+  - Checkpoint files (streamflow_dv_checkpoint.parquet,
+    streamflow_iv_checkpoint.parquet) are written to out_path so a re-run
+    can skip already-fetched sites without repeating API calls.
+  - Sites that returned no data are tracked in *_no_data.txt so they are
+    also skipped on re-run.
+
 Output: data/streamflow/streamflow.parquet
 Columns: site_no, date, discharge_cfs, discharge_cd, stage_ft, stage_cd
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pandas as pd
@@ -28,9 +37,16 @@ logger = logging.getLogger(__name__)
 PARAM_DISCHARGE = "00060"
 PARAM_STAGE = "00065"
 
+# DV fetch tuning
+_DV_MAX_WORKERS = 20        # parallel threads for DV fetch
+_DV_CHECKPOINT_EVERY = 200  # save DV checkpoint every N completed fetches
+
 # IV fetch tuning
-_IV_BATCH_SIZE = 10   # sites per get_iv() call
-_IV_YEAR_CHUNK = 5    # years per get_iv() call (limits response size)
+_IV_BATCH_SIZE = 25   # sites per get_iv() call (was 10)
+_IV_YEAR_CHUNK = 10   # years per get_iv() call (was 5)
+_IV_MAX_WORKERS = 20  # parallel threads for IV batch × window calls
+
+_COLS = ["site_no", "date", "discharge_cfs", "discharge_cd", "stage_ft", "stage_cd"]
 
 
 # ---------------------------------------------------------------------------
@@ -59,8 +75,8 @@ def _normalize_site_df(raw_df: pd.DataFrame) -> pd.DataFrame:
     # NWIS may return multiple sensors for the same parameter; keep first occurrence
     dupes = df.columns[df.columns.duplicated(keep=False)].unique().tolist()
     if dupes:
-        site_no = df["site_no"].iloc[0]
-        logger.warning(
+        site_no = df["site_no"].iloc[0] if "site_no" in df.columns and len(df) > 0 else "unknown"
+        logger.debug(
             "  %s: multiple sensors detected for %s — keeping first occurrence only",
             site_no, dupes,
         )
@@ -70,17 +86,72 @@ def _normalize_site_df(raw_df: pd.DataFrame) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = pd.NA
 
-    df = df[["site_no", "date", "discharge_cfs", "discharge_cd", "stage_ft", "stage_cd"]]
+    df = df[_COLS]
     df["date"] = pd.to_datetime(df["date"]).dt.normalize()
     return df
+
+
+def _fetch_dv_single(site_no: str, start: str, end: str) -> pd.DataFrame | None:
+    """Fetch DV data for one site. Returns a normalized DataFrame or None."""
+    try:
+        raw, _ = nwis.get_dv(
+            sites=[site_no],
+            parameterCd=[PARAM_DISCHARGE, PARAM_STAGE],
+            start=start,
+            end=end,
+        )
+        if raw.empty:
+            return None
+        return _normalize_site_df(raw)
+    except Exception as exc:
+        logger.warning("  %s: DV fetch failed: %s", site_no, exc)
+        return None
+
+
+def _fetch_iv_batch_window(
+    batch: list[str], win_start: str, win_end: str
+) -> pd.DataFrame | None:
+    """
+    Fetch IV stage for one (batch × window) pair and resample to daily means.
+    Returns a DataFrame with columns [site_no, date, stage_ft] or None.
+    """
+    try:
+        raw, _ = nwis.get_iv(
+            sites=batch,
+            parameterCd=PARAM_STAGE,
+            start=win_start,
+            end=win_end,
+        )
+    except Exception as exc:
+        logger.warning("  IV call failed (%s → %s): %s", win_start, win_end, exc)
+        return None
+
+    if raw.empty:
+        return None
+
+    iv = raw.reset_index()
+    iv["date"] = pd.to_datetime(iv["datetime"]).dt.normalize()
+
+    stage_col = next(
+        (c for c in iv.columns if PARAM_STAGE in c and "_cd" not in c), None
+    )
+    if stage_col is None:
+        return None
+
+    daily = (
+        iv.groupby(["site_no", "date"])[stage_col]
+        .mean()
+        .reset_index()
+        .rename(columns={stage_col: "stage_ft"})
+    )
+    return daily if not daily.empty else None
 
 
 def _fetch_iv_stage(site_dates: dict[str, tuple[str, str]]) -> pd.DataFrame:
     """
     Fetch stage from instantaneous values (15-min) and resample to daily means.
 
-    Requests are batched (_IV_BATCH_SIZE sites) and chunked into _IV_YEAR_CHUNK-year
-    windows to keep individual response sizes manageable.
+    All (batch × window) pairs are dispatched concurrently via ThreadPoolExecutor.
 
     Args:
         site_dates: site_no → (begin_date, end_date) for sites to query.
@@ -98,66 +169,55 @@ def _fetch_iv_stage(site_dates: dict[str, tuple[str, str]]) -> pd.DataFrame:
     global_start = min(pd.Timestamp(v[0]) for v in site_dates.values())
     global_end   = max(pd.Timestamp(v[1]) for v in site_dates.values())
 
-    # Build time windows
     windows: list[tuple[str, str]] = []
     cur = global_start
     while cur <= global_end:
-        win_end = min(cur + pd.DateOffset(years=_IV_YEAR_CHUNK) - pd.Timedelta(days=1), global_end)
+        win_end = min(
+            cur + pd.DateOffset(years=_IV_YEAR_CHUNK) - pd.Timedelta(days=1),
+            global_end,
+        )
         windows.append((cur.strftime("%Y-%m-%d"), win_end.strftime("%Y-%m-%d")))
         cur = win_end + pd.Timedelta(days=1)
 
     batches = [sites[i : i + _IV_BATCH_SIZE] for i in range(0, len(sites), _IV_BATCH_SIZE)]
     total_calls = len(batches) * len(windows)
     logger.info(
-        "  IV fetch: %d sites → %d batches × %d time windows = %d API calls",
-        len(sites), len(batches), len(windows), total_calls,
+        "  IV fetch: %d sites → %d batches × %d time windows = %d API calls (workers=%d)",
+        len(sites), len(batches), len(windows), total_calls, _IV_MAX_WORKERS,
     )
 
     frames: list[pd.DataFrame] = []
-    call_num = 0
+    completed = 0
 
-    for batch in batches:
-        for win_start, win_end in windows:
-            call_num += 1
-            logger.info(
-                "  IV call %d/%d: %d sites, %s → %s",
-                call_num, total_calls, len(batch), win_start, win_end,
-            )
-            try:
-                raw, _ = nwis.get_iv(
-                    sites=batch,
-                    parameterCd=PARAM_STAGE,
-                    start=win_start,
-                    end=win_end,
-                )
-            except Exception as exc:
-                logger.warning("  IV call failed (%s → %s): %s", win_start, win_end, exc)
-                continue
-
-            if raw.empty:
-                continue
-
-            iv = raw.reset_index()
-            iv["date"] = pd.to_datetime(iv["datetime"]).dt.normalize()
-
-            stage_col = next(
-                (c for c in iv.columns if PARAM_STAGE in c and "_cd" not in c), None
-            )
-            if stage_col is None:
-                continue
-
-            daily = (
-                iv.groupby(["site_no", "date"])[stage_col]
-                .mean()
-                .reset_index()
-                .rename(columns={stage_col: "stage_ft"})
-            )
-            frames.append(daily)
+    with ThreadPoolExecutor(max_workers=_IV_MAX_WORKERS) as ex:
+        future_map = {
+            ex.submit(_fetch_iv_batch_window, batch, ws, we): (batch, ws, we)
+            for batch in batches
+            for ws, we in windows
+        }
+        for fut in as_completed(future_map):
+            completed += 1
+            if completed % 50 == 0:
+                logger.info("  IV progress: %d/%d calls done", completed, total_calls)
+            result = fut.result()
+            if result is not None:
+                frames.append(result)
 
     if not frames:
         return pd.DataFrame(columns=["site_no", "date", "stage_ft"])
 
     return pd.concat(frames, ignore_index=True)
+
+
+def _load_no_data_sites(path: Path) -> set[str]:
+    """Load the list of sites previously confirmed to have no data."""
+    if path.exists():
+        return set(path.read_text().splitlines())
+    return set()
+
+
+def _save_no_data_sites(sites: set[str], path: Path) -> None:
+    path.write_text("\n".join(sorted(sites)))
 
 
 # ---------------------------------------------------------------------------
@@ -172,13 +232,19 @@ def fetch_streamflow(
     Fetch daily discharge and stage for all gages and save to Parquet.
 
     Stage is fetched via two passes:
-      1. DV (daily values) — fast, covers gages with pre-computed daily means.
+      1. DV (daily values) — parallelized; covers gages with pre-computed daily means.
       2. IV fallback — for sites with no DV stage, pulls 15-min instantaneous
          values and computes daily means.  Marked stage_cd = "iv_mean".
 
+    Checkpoint files written to out_path enable re-runs to skip already-fetched
+    sites:
+      streamflow_dv_checkpoint.parquet — DV data accumulated so far
+      streamflow_dv_no_data.txt        — sites confirmed to have no DV data
+      streamflow_iv_checkpoint.parquet — IV stage data accumulated so far
+      streamflow_iv_no_data.txt        — sites confirmed to have no IV data
+
     Args:
-        site_dates: Mapping of site_no → (begin_date, end_date), e.g.
-                    {"01144000": ("1960-10-01", "2025-03-03")}.
+        site_dates: Mapping of site_no → (begin_date, end_date).
         out_path:   Directory where streamflow.parquet will be written.
 
     Returns:
@@ -186,34 +252,80 @@ def fetch_streamflow(
         stage_ft, stage_cd].
     """
     logger.info(
-        "Fetching daily discharge + stage for %d gages (per-site date ranges)",
-        len(site_dates),
+        "Fetching daily discharge + stage for %d gages (workers=%d)",
+        len(site_dates), _DV_MAX_WORKERS,
     )
 
-    # ------------------------------------------------------------------
-    # Pass 1: DV fetch (discharge + stage)
-    # ------------------------------------------------------------------
-    frames: list[pd.DataFrame] = []
-    for site_no, (start, end) in site_dates.items():
-        logger.info("  %s: %s to %s", site_no, start, end)
-        raw, _ = nwis.get_dv(
-            sites=[site_no],
-            parameterCd=[PARAM_DISCHARGE, PARAM_STAGE],
-            start=start,
-            end=end,
-        )
-        if raw.empty:
-            logger.warning("  %s: no data returned", site_no)
-            continue
-        frames.append(_normalize_site_df(raw))
+    out_path.mkdir(parents=True, exist_ok=True)
+    dv_ckpt_file    = out_path / "streamflow_dv_checkpoint.parquet"
+    dv_nodata_file  = out_path / "streamflow_dv_no_data.txt"
+    iv_ckpt_file    = out_path / "streamflow_iv_checkpoint.parquet"
+    iv_nodata_file  = out_path / "streamflow_iv_no_data.txt"
 
-    if not frames:
-        logger.warning("No data returned for any gage.")
-        return pd.DataFrame(
-            columns=["site_no", "date", "discharge_cfs", "discharge_cd", "stage_ft", "stage_cd"]
-        )
+    # ------------------------------------------------------------------
+    # Pass 1: Parallel DV fetch (discharge + stage) with checkpointing
+    # ------------------------------------------------------------------
 
-    df = pd.concat(frames, ignore_index=True)
+    # Determine already-processed sites (data returned or confirmed empty)
+    if dv_ckpt_file.exists():
+        dv_checkpoint = pd.read_parquet(dv_ckpt_file)
+        done_sites = set(dv_checkpoint["site_no"].unique())
+    else:
+        dv_checkpoint = pd.DataFrame(columns=_COLS)
+        done_sites = set()
+
+    done_sites |= _load_no_data_sites(dv_nodata_file)
+
+    remaining = {s: d for s, d in site_dates.items() if s not in done_sites}
+    logger.info(
+        "  DV pass: %d sites to fetch, %d already done (checkpoint/no-data)",
+        len(remaining), len(site_dates) - len(remaining),
+    )
+
+    frames: list[pd.DataFrame] = [dv_checkpoint] if not dv_checkpoint.empty else []
+    no_data_sites: set[str] = set()
+    completed = 0
+
+    with ThreadPoolExecutor(max_workers=_DV_MAX_WORKERS) as ex:
+        future_map = {
+            ex.submit(_fetch_dv_single, site_no, start, end): site_no
+            for site_no, (start, end) in remaining.items()
+        }
+        for fut in as_completed(future_map):
+            site_no = future_map[fut]
+            result = fut.result()
+            if result is not None:
+                frames.append(result)
+            else:
+                no_data_sites.add(site_no)
+            completed += 1
+            if completed % _DV_CHECKPOINT_EVERY == 0:
+                partial = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=_COLS)
+                partial.to_parquet(dv_ckpt_file, index=False)
+                all_no_data = _load_no_data_sites(dv_nodata_file) | no_data_sites
+                _save_no_data_sites(all_no_data, dv_nodata_file)
+                logger.info(
+                    "  DV checkpoint: %d/%d sites processed (%d with data, %d no data)",
+                    completed, len(remaining),
+                    len(partial["site_no"].unique()) if not partial.empty else 0,
+                    len(all_no_data),
+                )
+
+    # Save final DV checkpoint and no-data list
+    if frames:
+        df = pd.concat(frames, ignore_index=True)
+        df.to_parquet(dv_ckpt_file, index=False)
+    else:
+        logger.warning("No DV data returned for any gage.")
+        return pd.DataFrame(columns=_COLS)
+
+    all_no_data = _load_no_data_sites(dv_nodata_file) | no_data_sites
+    _save_no_data_sites(all_no_data, dv_nodata_file)
+
+    logger.info(
+        "  DV pass complete: %d records, %d sites with data, %d sites no data",
+        len(df), df["site_no"].nunique(), len(all_no_data),
+    )
 
     # ------------------------------------------------------------------
     # Pass 2: IV fallback for sites with no DV stage
@@ -229,12 +341,51 @@ def fetch_streamflow(
             "Pass 2: %d/%d sites lack DV stage — attempting IV fallback",
             len(no_dv_stage), len(dv_stage_sites),
         )
-        iv_site_dates = {s: site_dates[s] for s in no_dv_stage if s in site_dates}
-        iv_stage = _fetch_iv_stage(iv_site_dates)
+
+        # Sites already handled in a previous IV run
+        iv_done_sites = set()
+        if iv_ckpt_file.exists():
+            iv_checkpoint = pd.read_parquet(iv_ckpt_file)
+            iv_done_sites = set(iv_checkpoint["site_no"].unique())
+        else:
+            iv_checkpoint = pd.DataFrame(columns=["site_no", "date", "stage_ft"])
+
+        iv_done_sites |= _load_no_data_sites(iv_nodata_file)
+
+        iv_remaining = {
+            s: site_dates[s]
+            for s in no_dv_stage
+            if s in site_dates and s not in iv_done_sites
+        }
+        logger.info(
+            "  IV pass: %d sites to fetch, %d already done (checkpoint/no-data)",
+            len(iv_remaining), len(no_dv_stage) - len(iv_remaining),
+        )
+
+        if iv_remaining:
+            iv_new = _fetch_iv_stage(iv_remaining)
+        else:
+            iv_new = pd.DataFrame(columns=["site_no", "date", "stage_ft"])
+
+        # Merge new IV data with checkpoint
+        iv_stage_parts = [p for p in [iv_checkpoint, iv_new] if not p.empty]
+        iv_stage = pd.concat(iv_stage_parts, ignore_index=True) if iv_stage_parts else pd.DataFrame(columns=["site_no", "date", "stage_ft"])
+
+        # Track sites with no IV data
+        if not iv_new.empty:
+            iv_fetched = set(iv_new["site_no"].unique())
+        else:
+            iv_fetched = set()
+        iv_no_data = {s for s in iv_remaining if s not in iv_fetched}
+        all_iv_no_data = _load_no_data_sites(iv_nodata_file) | iv_no_data
 
         if not iv_stage.empty:
-            iv_stage = iv_stage.rename(columns={"stage_ft": "_iv_stage"})
-            df = df.merge(iv_stage, on=["site_no", "date"], how="left")
+            iv_stage.to_parquet(iv_ckpt_file, index=False)
+        _save_no_data_sites(all_iv_no_data, iv_nodata_file)
+
+        if not iv_stage.empty:
+            iv_stage_renamed = iv_stage.rename(columns={"stage_ft": "_iv_stage"})
+            df = df.merge(iv_stage_renamed, on=["site_no", "date"], how="left")
             fill_mask = df["stage_ft"].isna() & df["_iv_stage"].notna()
             df.loc[fill_mask, "stage_ft"] = df.loc[fill_mask, "_iv_stage"]
             df.loc[fill_mask, "stage_cd"] = "iv_mean"
@@ -255,27 +406,40 @@ def fetch_streamflow(
     df["discharge_cfs"] = pd.to_numeric(df["discharge_cfs"], errors="coerce")
 
     # ------------------------------------------------------------------
-    # Summary logging
+    # Summary logging (vectorized — avoids O(n²) per-site DataFrame scans)
     # ------------------------------------------------------------------
-    counts = df.groupby("site_no").size()
-    for site, n in counts.items():
-        has_stage = df.loc[df["site_no"] == site, "stage_ft"].notna().any()
-        stage_src = ""
-        if has_stage:
-            iv_rows = (
-                (df["site_no"] == site) & (df["stage_cd"] == "iv_mean")
-            ).sum()
-            stage_src = " (iv_mean)" if iv_rows > 0 else " (dv)"
-        logger.info(
-            "  %s: %d records | stage: %s%s",
-            site, n, "yes" if has_stage else "no", stage_src,
+    summary = (
+        df.groupby("site_no")
+        .agg(
+            n_records=("date", "count"),
+            has_stage=("stage_ft", lambda s: s.notna().any()),
+            iv_count=("stage_cd", lambda s: (s == "iv_mean").sum()),
         )
+        .reset_index()
+    )
+
+    for _, row in summary.iterrows():
+        stage_src = ""
+        if row["has_stage"]:
+            stage_src = " (iv_mean)" if row["iv_count"] > 0 else " (dv)"
+        logger.debug(
+            "  %s: %d records | stage: %s%s",
+            row["site_no"], row["n_records"],
+            "yes" if row["has_stage"] else "no",
+            stage_src,
+        )
+
+    n_with_stage = int(summary["has_stage"].sum())
+    n_iv = int((summary["iv_count"] > 0).sum())
+    logger.info(
+        "  Stage summary: %d/%d sites have stage (%d via IV fallback, %d via DV only)",
+        n_with_stage, len(summary), n_iv, n_with_stage - n_iv,
+    )
 
     missing = set(site_dates) - set(df["site_no"].unique())
     if missing:
         logger.warning("No data returned for: %s", sorted(missing))
 
-    out_path.mkdir(parents=True, exist_ok=True)
     parquet_file = out_path / "streamflow.parquet"
     df.to_parquet(parquet_file, index=False)
     logger.info("Saved %d rows → %s", len(df), parquet_file)

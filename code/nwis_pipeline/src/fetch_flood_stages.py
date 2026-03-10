@@ -42,7 +42,7 @@ NWPS_BASE = "https://api.water.noaa.gov/nwps/v1/gauges"
 MAX_DIST_DEG = 0.05
 
 # Concurrent workers for individual NWPS gauge record fetches.
-MAX_WORKERS = 20
+MAX_WORKERS = 50
 
 
 def _fetch_nwps_bulk() -> pd.DataFrame:
