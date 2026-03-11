@@ -73,6 +73,13 @@ def fetch_site_metadata(gage_ids: list[str], out_path: Path) -> pd.DataFrame:
     Returns:
         DataFrame with readable column names indexed by site_no.
     """
+    out_path.mkdir(parents=True, exist_ok=True)
+    parquet_file = out_path / "site_info.parquet"
+
+    if parquet_file.exists():
+        logger.info("site_info.parquet already exists — skipping fetch, loading from disk.")
+        return pd.read_parquet(parquet_file)
+
     logger.info("Fetching site metadata for %d gages (workers=%d)", len(gage_ids), _META_MAX_WORKERS)
 
     batches = [gage_ids[i : i + BATCH_SIZE] for i in range(0, len(gage_ids), BATCH_SIZE)]
@@ -133,8 +140,6 @@ def fetch_site_metadata(gage_ids: list[str], out_path: Path) -> pd.DataFrame:
     if missing:
         logger.warning("No metadata returned for: %s", sorted(missing))
 
-    out_path.mkdir(parents=True, exist_ok=True)
-    parquet_file = out_path / "site_info.parquet"
     df.to_parquet(parquet_file, index=False)
     logger.info("Saved %d rows → %s", len(df), parquet_file)
 
