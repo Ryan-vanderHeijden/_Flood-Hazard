@@ -18,6 +18,11 @@ Output
     reach_id       int64   NWM feature_id
     date           date    UTC date of daily mean
     streamflow_cms float32 daily mean streamflow in m³/s
+    streamflow_cfs float32 daily mean streamflow in ft³/s (× 35.3147)
+
+<out_path>/nwm_metadata.json
+    Provenance record: NWM version, source URI, fetch date, site count,
+    year range, and list of years successfully checkpointed.
 
 Checkpointing
 -------------
@@ -34,8 +39,10 @@ concurrent year at 7,000 sites). Raise it on machines with more RAM and a
 fast connection to AWS us-east-1.
 """
 
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -49,6 +56,7 @@ _BUCKET_URI = "s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/chrtout.zarr"
 _REGION = "us-east-1"
 _VARIABLE = "streamflow"
 _YEAR_WORKERS = 4  # concurrent years; each holds ~250 MB peak at 7,000 sites
+_CFS_PER_CMS  = 35.3147
 
 
 # ---------------------------------------------------------------------------
@@ -89,8 +97,18 @@ def fetch_nwm_streamflow(gauge_map_path: Path, out_path: Path) -> None:
             "Inspect the file for non-numeric values."
         ) from exc
 
-    # Deduplicate: keep first site_no per reach_id
+    # Deduplicate: keep first site_no per reach_id.
+    # Warn about any sites that share a reach_id — they will not get separate
+    # NWM data, since the Zarr is indexed by reach_id, not site_no.
+    n_before = len(gmap)
     gmap = gmap.drop_duplicates(subset=["reach_id"])
+    n_dropped = n_before - len(gmap)
+    if n_dropped:
+        logger.warning(
+            "%d site(s) share a reach_id with another site and were dropped "
+            "(only the first site_no per reach_id is retained).",
+            n_dropped,
+        )
 
     feature_id_to_site_no: dict[int, str] = dict(
         zip(gmap["reach_id"].tolist(), gmap["site_no"].tolist())
@@ -154,6 +172,7 @@ def fetch_nwm_streamflow(gauge_map_path: Path, out_path: Path) -> None:
             years_cached, len(years), len(years_to_fetch),
         )
 
+    failed_years: list[int] = []
     if years_to_fetch:
         logger.info(
             "Fetching %d years with %d concurrent workers.",
@@ -174,6 +193,13 @@ def fetch_nwm_streamflow(gauge_map_path: Path, out_path: Path) -> None:
                     logger.info("Year %d complete: %d rows.", year, n_rows)
                 except Exception as exc:
                     logger.error("Year %d failed: %s", year, exc)
+                    failed_years.append(year)
+
+    if failed_years:
+        logger.warning(
+            "%d year(s) failed and will be absent from output: %s",
+            len(failed_years), sorted(failed_years),
+        )
 
     logger.info("All %d years processed.", len(years))
 
@@ -181,6 +207,25 @@ def fetch_nwm_streamflow(gauge_map_path: Path, out_path: Path) -> None:
     # Step 4: Consolidate checkpoints → final parquet
     # ------------------------------------------------------------------
     _consolidate(checkpoint_dir, out_path, start_year, end_year)
+
+    # ------------------------------------------------------------------
+    # Step 5: Write provenance metadata
+    # ------------------------------------------------------------------
+    years_present = sorted(
+        int(p.stem) for p in checkpoint_dir.glob("*.parquet") if p.stem.isdigit()
+    )
+    metadata = {
+        "nwm_version": "3.0",
+        "source": _BUCKET_URI,
+        "fetched_date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "n_sites": len(available_ids),
+        "year_range": [start_year, end_year],
+        "years_present": years_present,
+    }
+    metadata_file = out_path / "nwm_metadata.json"
+    with open(metadata_file, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
+    logger.info("Saved provenance metadata → %s", metadata_file)
 
 
 # ---------------------------------------------------------------------------
@@ -211,39 +256,42 @@ def _fetch_year(
         s3fs.S3Map(root=_BUCKET_URI, s3=s3, check=False),
         consolidated=True,
     )
-    ds_filtered = ds[[_VARIABLE]].sel(feature_id=available_ids)
+    try:
+        ds_filtered = ds[[_VARIABLE]].sel(feature_id=available_ids)
 
-    ds_year = ds_filtered.sel(
-        time=slice(f"{year}-01-01", f"{year}-12-31T23:59:59")
-    )
+        ds_year = ds_filtered.sel(
+            time=slice(f"{year}-01-01", f"{year}-12-31T23:59:59")
+        )
 
-    if ds_year.sizes["time"] == 0:
-        pd.DataFrame(
-            columns=["site_no", "reach_id", "date", "streamflow_cms"]
-        ).to_parquet(ckpt, index=False)
-        return 0
+        if ds_year.sizes["time"] == 0:
+            pd.DataFrame(
+                columns=["site_no", "reach_id", "date", "streamflow_cms", "streamflow_cfs"]
+            ).to_parquet(ckpt, index=False)
+            return 0
 
-    # Resample hourly → daily mean (.compute() triggers the S3 reads)
-    daily = ds_year.resample(time="1D").mean(skipna=True).compute()
+        # Resample hourly → daily mean (.compute() triggers the S3 reads)
+        daily = ds_year.resample(time="1D").mean(skipna=True).compute()
 
-    df = (
-        daily
-        .to_dataframe()
-        .reset_index()
-        .rename(columns={_VARIABLE: "streamflow_cms", "time": "date"})
-    )
+        df = (
+            daily
+            .to_dataframe()
+            .reset_index()
+            .rename(columns={_VARIABLE: "streamflow_cms", "time": "date"})
+        )
 
-    df["date"]        = pd.to_datetime(df["date"]).dt.date
-    df["site_no"]     = df["feature_id"].map(feature_id_to_site_no)
-    df["reach_id"]    = df["feature_id"].astype(np.int64)
-    df["streamflow_cms"] = df["streamflow_cms"].astype(np.float32)
+        df["date"]           = pd.to_datetime(df["date"]).dt.date
+        df["site_no"]        = df["feature_id"].map(feature_id_to_site_no)
+        df["reach_id"]       = df["feature_id"].astype(np.int64)
+        df["streamflow_cms"] = df["streamflow_cms"].astype(np.float32)
+        df["streamflow_cfs"] = (df["streamflow_cms"] * _CFS_PER_CMS).astype(np.float32)
 
-    df = df[["site_no", "reach_id", "date", "streamflow_cms"]]
-    df = df.dropna(subset=["streamflow_cms"])
+        df = df[["site_no", "reach_id", "date", "streamflow_cms", "streamflow_cfs"]]
+        df = df.dropna(subset=["site_no", "streamflow_cms"])
 
-    df.to_parquet(ckpt, index=False)
-    ds.close()
-    return len(df)
+        df.to_parquet(ckpt, index=False)
+        return len(df)
+    finally:
+        ds.close()
 
 
 def _consolidate(
@@ -255,6 +303,16 @@ def _consolidate(
     """Concatenate all yearly checkpoints into a single sorted parquet."""
     logger.info("Consolidating yearly checkpoints …")
 
+    missing_years = [
+        y for y in range(start_year, end_year + 1)
+        if not (checkpoint_dir / f"{y}.parquet").exists()
+    ]
+    if missing_years:
+        logger.warning(
+            "%d year(s) have no checkpoint and will be absent from output: %s",
+            len(missing_years), missing_years,
+        )
+
     parts = []
     for year in range(start_year, end_year + 1):
         ckpt = checkpoint_dir / f"{year}.parquet"
@@ -264,7 +322,7 @@ def _consolidate(
     if not parts:
         logger.warning("No checkpoint files found — output will be empty.")
         df_final = pd.DataFrame(
-            columns=["site_no", "reach_id", "date", "streamflow_cms"]
+            columns=["site_no", "reach_id", "date", "streamflow_cms", "streamflow_cfs"]
         )
     else:
         df_final = pd.concat(parts, ignore_index=True)

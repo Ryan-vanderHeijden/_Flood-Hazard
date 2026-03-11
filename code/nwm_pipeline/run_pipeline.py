@@ -35,6 +35,9 @@ GAUGE_MAP_PATH = _PIPELINE_DIR.parent / "nwis_pipeline" / "data" / "metadata" / 
 # Output directory for NWM data
 NWM_OUT_PATH = _PIPELINE_DIR / "data" / "nwm"
 
+# Log file written alongside this script
+_LOG_FILE = _PIPELINE_DIR / "pipeline.log"
+
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -45,6 +48,10 @@ def _configure_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(_LOG_FILE, encoding="utf-8"),
+        ],
     )
 
 
