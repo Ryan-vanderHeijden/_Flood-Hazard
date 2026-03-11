@@ -28,6 +28,7 @@ Columns: site_no, date, discharge_cfs, discharge_cd, stage_ft, stage_cd
 """
 
 import logging
+import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -49,8 +50,8 @@ _IV_BATCH_SIZE = 25      # sites per get_iv() call
 _IV_YEAR_CHUNK = 10      # years per get_iv() call
 _IV_MAX_WORKERS = 10     # parallel threads for IV batch × window calls (reduced to avoid rate-limiting)
 _IV_MIN_START = "2000-01-01"  # NWIS IV data not reliably available before ~2000
-_IV_MAX_RETRIES = 3      # retry attempts on connection errors
-_IV_RETRY_DELAY = 3.0    # seconds between retry attempts
+_IV_MAX_RETRIES = 5      # retry attempts on connection errors
+_IV_RETRY_BASE = 4.0     # base seconds for exponential backoff (× 2^attempt + jitter)
 
 _COLS = ["site_no", "date", "discharge_cfs", "discharge_cd", "stage_ft", "stage_cd"]
 
@@ -151,11 +152,12 @@ def _fetch_iv_batch_window(
                 or "RemoteDisconnected" in exc_str
             )
             if is_connection_err and attempt < _IV_MAX_RETRIES - 1:
+                delay = _IV_RETRY_BASE * (2 ** attempt) + random.uniform(0, 2)
                 logger.debug(
-                    "  IV call (%s → %s) attempt %d failed: %s — retrying in %.0fs",
-                    win_start, win_end, attempt + 1, exc, _IV_RETRY_DELAY,
+                    "  IV call (%s → %s) attempt %d failed: %s — retrying in %.1fs",
+                    win_start, win_end, attempt + 1, exc, delay,
                 )
-                time.sleep(_IV_RETRY_DELAY)
+                time.sleep(delay)
             else:
                 logger.warning("  IV call failed (%s → %s): %s", win_start, win_end, exc)
                 return None
