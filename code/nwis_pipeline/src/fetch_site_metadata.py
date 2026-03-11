@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Service 2: Fetch basic site attributes from USGS NWIS for each gage.
 

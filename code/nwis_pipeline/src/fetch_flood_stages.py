@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Service 3: Fetch NWS flood stage thresholds for each gage.
 

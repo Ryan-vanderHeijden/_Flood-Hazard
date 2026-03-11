@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Service 1: Fetch daily mean discharge and stage from USGS NWIS.
 
