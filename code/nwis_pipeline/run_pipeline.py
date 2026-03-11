@@ -147,7 +147,6 @@ def main():
 
     flood_stages = fetch_flood_stages(
         gage_ids=stage_gage_ids,
-        site_info=site_info,
         out_path=DATA_DIR / "metadata",
     )
 

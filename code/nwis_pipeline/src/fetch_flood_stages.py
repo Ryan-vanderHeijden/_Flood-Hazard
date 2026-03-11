@@ -16,11 +16,12 @@ Data source: NWS National Water Prediction Service (NWPS) API
   https://api.water.noaa.gov/nwps/v1/gauges
 
 Strategy:
-  1. Fetch all NWPS gauge locations (bulk endpoint, ~12 k gauges).
-  2. Spatially match each target USGS site to its nearest NWPS gauge
-     using a Euclidean-degree distance threshold.
-  3. Parallel-fetch individual NWPS records for matched gauges.
-  4. Verify the NWPS usgsId field matches the USGS site number.
+  1. Fetch USGS→NWS LID crosswalk from NOAA HADS
+     (https://hads.ncep.noaa.gov/USGS/ALL_USGS-HADS_SITES.txt).
+  2. Direct lookup: site_no → LID(s). No spatial matching needed.
+  3. Parallel-fetch individual NWPS records for matched LIDs.
+  4. Verify the NWPS usgsId field matches the USGS site number
+     (handles the ~37 sites that map to multiple LIDs).
   5. Extract flood category stage/flow values and impact statements.
 
 Note: Only sites with observed stage data need flood stage thresholds;
@@ -43,27 +44,32 @@ import requests
 logger = logging.getLogger(__name__)
 
 NWPS_BASE = "https://api.water.noaa.gov/nwps/v1/gauges"
-
-# Maximum Euclidean distance (degrees) for a spatial match to be accepted.
-# ~0.05° ≈ 5 km — generous enough to account for coordinate rounding.
-MAX_DIST_DEG = 0.05
+HADS_URL  = "https://hads.ncep.noaa.gov/USGS/ALL_USGS-HADS_SITES.txt"
 
 # Concurrent workers for individual NWPS gauge record fetches.
 MAX_WORKERS = 50
 
 
-def _fetch_nwps_bulk() -> pd.DataFrame:
-    """Fetch all NWPS gauge LIDs with coordinates (single bulk request)."""
-    resp = requests.get(NWPS_BASE, timeout=60)
+def _fetch_hads_crosswalk() -> pd.DataFrame:
+    """
+    Fetch the NOAA HADS crosswalk of USGS site numbers to NWS LIDs.
+
+    Returns a DataFrame with columns [site_no, lid].  Sites with multiple
+    LIDs appear as multiple rows.
+    """
+    resp = requests.get(HADS_URL, timeout=30)
     resp.raise_for_status()
-    gauges = resp.json().get("gauges", [])
-    return pd.DataFrame(
-        [
-            {"lid": g["lid"], "lat": g["latitude"], "lon": g["longitude"]}
-            for g in gauges
-            if "latitude" in g and "longitude" in g
-        ]
-    )
+
+    rows = []
+    for line in resp.text.splitlines()[4:]:   # skip 4-line header
+        if len(line) < 20 or line.startswith("---"):
+            continue
+        lid  = line[0:5].strip()
+        usgs = line[6:21].strip()
+        if lid and usgs:
+            rows.append({"site_no": usgs, "lid": lid})
+
+    return pd.DataFrame(rows)
 
 
 def _fetch_nwps_gauge(lid: str) -> dict | None:
@@ -122,7 +128,6 @@ def _extract_stages(record: dict) -> dict:
 
 def fetch_flood_stages(
     gage_ids: list[str],
-    site_info: pd.DataFrame,
     out_path: Path,
 ) -> pd.DataFrame:
     """
@@ -131,8 +136,6 @@ def fetch_flood_stages(
     Args:
         gage_ids:  USGS site numbers to process (should be sites with
                    observed stage data).
-        site_info: DataFrame with columns [site_no, latitude, longitude];
-                   used to spatially match USGS sites to NWPS gauges.
         out_path:  Directory where flood_stages.parquet will be written.
 
     Returns:
@@ -157,65 +160,41 @@ def fetch_flood_stages(
     logger.info("Fetching NWPS flood stages for %d gages", len(gage_ids))
 
     # ------------------------------------------------------------------
-    # Step 1: Fetch all NWPS gauge locations (one request, ~12 k gauges)
+    # Step 1: Fetch USGS → NWS LID crosswalk from HADS
     # ------------------------------------------------------------------
     try:
-        nwps = _fetch_nwps_bulk()
+        crosswalk = _fetch_hads_crosswalk()
     except requests.RequestException as exc:
-        logger.error("Failed to fetch NWPS bulk gauge list: %s", exc)
+        logger.error("Failed to fetch HADS crosswalk: %s", exc)
         return empty
 
-    logger.info("  NWPS bulk list: %d gauges", len(nwps))
+    logger.info("  HADS crosswalk: %d entries", len(crosswalk))
 
     # ------------------------------------------------------------------
-    # Step 2: Spatial nearest-neighbour match
+    # Step 2: Direct site_no → LID lookup
     # ------------------------------------------------------------------
-    targets = (
-        site_info[site_info["site_no"].isin(gage_ids)][
-            ["site_no", "latitude", "longitude"]
-        ]
-        .dropna(subset=["latitude", "longitude"])
-        .copy()
-    )
+    targets = crosswalk[crosswalk["site_no"].isin(gage_ids)].copy()
 
-    if targets.empty:
-        logger.warning("No lat/lon available for target gages; cannot match to NWPS.")
-        return empty
-
-    # Euclidean distance in degree-space — sufficient for a threshold match.
-    # Shapes: site_coords (M, 2), nwps_coords (N, 2) → dists (M, N)
-    nwps_coords = nwps[["lat", "lon"]].values
-    site_coords = targets[["latitude", "longitude"]].values
-
-    dists = np.sqrt(
-        (site_coords[:, 0:1] - nwps_coords[:, 0]) ** 2
-        + (site_coords[:, 1:2] - nwps_coords[:, 1]) ** 2
-    )
-
-    best_idx = dists.argmin(axis=1)
-    best_dist = dists[np.arange(len(targets)), best_idx]
-
-    targets["lid"] = nwps.iloc[best_idx]["lid"].values
-    targets["dist"] = best_dist
-    matched = targets[targets["dist"] <= MAX_DIST_DEG].copy()
-
-    n_matched = len(matched)
-    n_no_match = len(targets) - n_matched
+    n_matched  = targets["site_no"].nunique()
+    n_no_match = len(set(gage_ids)) - n_matched
     logger.info(
-        "  Spatially matched %d/%d gages to NWPS gauges (threshold %.3f°)",
-        n_matched, len(targets), MAX_DIST_DEG,
+        "  Matched %d/%d gages to NWS LIDs via HADS crosswalk",
+        n_matched, len(set(gage_ids)),
     )
     if n_no_match:
-        logger.info("  %d gages had no NWPS gauge within distance threshold", n_no_match)
+        logger.info(
+            "  %d gages not in HADS crosswalk (no NWS forecast point)",
+            n_no_match,
+        )
 
-    if matched.empty:
-        logger.warning("No NWPS gauge matches found.")
+    if targets.empty:
+        logger.warning("No LID matches found in HADS crosswalk.")
         return empty
 
     # ------------------------------------------------------------------
     # Step 3: Parallel-fetch individual NWPS records
     # ------------------------------------------------------------------
-    lids = matched["lid"].unique().tolist()
+    lids = targets["lid"].unique().tolist()
     logger.info("  Fetching individual records for %d NWPS gauges...", len(lids))
 
     lid_records: dict[str, dict] = {}
@@ -231,41 +210,49 @@ def fetch_flood_stages(
 
     # ------------------------------------------------------------------
     # Step 4: Verify usgsId and extract stages
+    # For sites with multiple LIDs, use the first that passes verification.
     # ------------------------------------------------------------------
     rows = []
     gauge_map_rows = []
-    for _, row in matched.iterrows():
+    seen_sites: set[str] = set()
+
+    for _, row in targets.iterrows():
+        site_no = row["site_no"]
+        if site_no in seen_sites:
+            continue  # already resolved via an earlier LID for this site
+
         record = lid_records.get(row["lid"])
         if record is None:
             continue
 
         usgs_id = record.get("usgsId", "")
         if not usgs_id:
-            # NWPS gauge has no associated USGS ID — cannot verify match
             logger.debug(
-                "  LID %s has no usgsId (nearest to %s, dist %.4f°); skipping",
-                row["lid"], row["site_no"], row["dist"],
+                "  LID %s has no usgsId (candidate for %s); skipping",
+                row["lid"], site_no,
             )
             continue
 
-        if usgs_id.zfill(8) != str(row["site_no"]).zfill(8):
+        if usgs_id.zfill(8) != str(site_no).zfill(8):
             logger.debug(
-                "  LID %s: usgsId %s != site_no %s (dist %.4f°); skipping",
-                row["lid"], usgs_id, row["site_no"], row["dist"],
+                "  LID %s: usgsId %s != site_no %s; skipping",
+                row["lid"], usgs_id, site_no,
             )
             continue
 
         stages = _extract_stages(record)
-        rows.append({"site_no": row["site_no"], **stages})
+        rows.append({"site_no": site_no, **stages})
 
         reach_id = record.get("reachId", "")
         if isinstance(reach_id, str):
             reach_id = reach_id.strip() or None
         gauge_map_rows.append({
-            "site_no":  row["site_no"],
+            "site_no":  site_no,
             "lid":      row["lid"],
             "reach_id": reach_id,
         })
+
+        seen_sites.add(site_no)
 
     # ------------------------------------------------------------------
     # Step 5: Build output — all gage_ids present, unmatched → NaN

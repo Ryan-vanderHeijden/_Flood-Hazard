@@ -69,7 +69,7 @@ To maximise stage coverage, Service 2 uses two passes — both parallelized with
 
 Both passes write checkpoint files to `data/streamflow/` so a re-run after a crash resumes from where it left off rather than re-fetching all data. Delete `streamflow_dv_checkpoint.parquet`, `streamflow_iv_checkpoint.parquet`, and the `*_no_data.txt` files to force a full re-fetch.
 
-Flood stage thresholds (Service 3) are fetched from the [NWS National Water Prediction Service API](https://api.water.noaa.gov/nwps/v1/gauges) using 50 parallel workers. Each USGS site is spatially matched to its nearest NWS gauge; the match is verified against the NWS `usgsId` field. Only gages with observed stage data are queried. Two files are written:
+Flood stage thresholds (Service 3) are fetched from the [NWS National Water Prediction Service API](https://api.water.noaa.gov/nwps/v1/gauges) using 50 parallel workers. The USGS site → NWS LID mapping is resolved via the [NOAA HADS crosswalk](https://hads.ncep.noaa.gov/USGS/ALL_USGS-HADS_SITES.txt) (~10,483 entries), covering ~84% of stage gages. Matches are verified against the NWS `usgsId` field. Only gages with observed stage data are queried. Two files are written:
 
 - **`flood_stages.parquet`** — stage (ft) and flow (cfs) thresholds for action/minor/moderate/major categories, plus NWS impact statements for each category.
 - **`gauge_map.parquet`** — maps each USGS `site_no` to its NWS LID and NWM `reach_id`.
