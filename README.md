@@ -23,21 +23,24 @@ Key objectives:
 
 ```
 code/
-└── nwis_pipeline/  # Data acquisition pipeline (USGS NWIS)
+├── requirements.txt       # shared dependencies for all pipelines
+├── nwis_pipeline/         # Pipeline 1: USGS NWIS data acquisition
+└── nwm_pipeline/          # Pipeline 2: NWM Retrospective v3.0 streamflow
 ```
 
 ---
 
-## Data Pipeline (`code/nwis_pipeline/`)
-
-Fetches and organizes the observational data needed for threshold development. All data are pulled from public APIs (USGS NWIS, NOAA) and written to local Parquet files.
-
-### Setup
+## Setup
 
 ```bash
-cd code/nwis_pipeline
-pip install -r requirements.txt
+pip install -r code/requirements.txt
 ```
+
+---
+
+## Pipeline 1 — NWIS (`code/nwis_pipeline/`)
+
+Fetches and organizes the observational data needed for threshold development. All data are pulled from public APIs (USGS NWIS, NOAA) and written to local Parquet files.
 
 ### Configuration
 
@@ -46,7 +49,7 @@ Edit `config/gages.csv` to add or remove USGS gage site IDs.
 ### Run
 
 ```bash
-python run_pipeline.py
+python code/nwis_pipeline/run_pipeline.py
 ```
 
 ### Services (run in sequence)
@@ -80,8 +83,34 @@ Open `code/nwis_pipeline/inspect_outputs.ipynb` in Jupyter to explore the fetche
 
 ---
 
+## Pipeline 2 — NWM Retrospective (`code/nwm_pipeline/`)
+
+Fetches NWM Retrospective v3.0 daily-mean streamflow from the public AWS S3 Zarr store for every gauge that has a NWM reach_id in `gauge_map.parquet`. Run this after Pipeline 1.
+
+**Data source:** `s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/chrtout.zarr` (anonymous public access, us-east-1). Time span: ~Feb 1979 – Dec 2023 (hourly, resampled to daily mean).
+
+### Run
+
+```bash
+python code/nwm_pipeline/run_pipeline.py
+```
+
+### Output
+
+| File | Description |
+|------|-------------|
+| `data/nwm/nwm_streamflow.parquet` | Daily mean streamflow (m³/s) per site, full period of record |
+| `data/nwm/checkpoints/{year}.parquet` | Per-year checkpoints — delete to re-fetch a specific year |
+
+**Output columns:** `site_no` (USGS ID), `reach_id` (NWM feature_id), `date`, `streamflow_cms` (m³/s).
+
+Streamflow is stored in NWM native units (m³/s). To convert to CFS: multiply by 35.3147.
+
+Processing is year-by-year with checkpointing and parallel execution (`_YEAR_WORKERS = 4` concurrent years by default). If the job is interrupted, restart the same command to resume from where it left off. Each worker opens its own S3 connection; raise `_YEAR_WORKERS` in `src/fetch_nwm_streamflow.py` if you have more RAM available (~250 MB peak per concurrent year at 7,000 sites).
+
+---
+
 ## Dependencies
 
 - Python 3.10+
-- [`dataretrieval`](https://github.com/DOI-USGS/dataretrieval-python) — USGS NWIS API wrapper
-- `pandas`, `pyarrow`, `requests`, `numpy`
+- See `code/requirements.txt` for the full list
