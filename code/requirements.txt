@@ -1,0 +1,14 @@
+# NWIS pipeline
+dataretrieval
+requests
+
+# NWM pipeline
+xarray
+zarr
+s3fs
+dask
+
+# Shared
+numpy
+pandas
+pyarrow
