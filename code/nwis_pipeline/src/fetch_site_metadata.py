@@ -106,13 +106,15 @@ def fetch_site_metadata(gage_ids: list[str], out_path: Path) -> pd.DataFrame:
 
     if catalog_frames:
         catalog = pd.concat(catalog_frames).reset_index()
-        discharge_por = (
-            catalog[catalog["parm_cd"] == "00060"]
+        # Use the union of discharge (00060) and stage (00065) periods so that
+        # sites with a longer stage record are not silently truncated.
+        por = (
+            catalog[catalog["parm_cd"].isin(["00060", "00065"])]
             .groupby("site_no")
             .agg(begin_date=("begin_date", "min"), end_date=("end_date", "max"))
             .reset_index()
         )
-        df = df.merge(discharge_por, on="site_no", how="left")
+        df = df.merge(por, on="site_no", how="left")
     else:
         logger.warning("No series catalog data retrieved; period-of-record will be missing.")
         df["begin_date"] = pd.NaT

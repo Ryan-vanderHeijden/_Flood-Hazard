@@ -28,13 +28,17 @@ CONFIG_DIR = BASE_DIR / "config"
 DATA_DIR   = BASE_DIR / "data"
 
 # ---------------------------------------------------------------------------
-# Logging
+# Logging — console + rotating log file
 # ---------------------------------------------------------------------------
+_log_file = BASE_DIR / "pipeline.log"
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[logging.StreamHandler(sys.stdout)],
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(_log_file, encoding="utf-8"),
+    ],
 )
 logger = logging.getLogger("pipeline")
 
@@ -58,6 +62,7 @@ def _summarize_coverage(
     gage_ids: list[str],
     streamflow_df: pd.DataFrame,
     flood_stages: pd.DataFrame,
+    gauge_map: pd.DataFrame,
     out_path: Path,
 ) -> None:
     """Log and save a per-site data coverage summary."""
@@ -87,22 +92,79 @@ def _summarize_coverage(
     for col in ("has_flood_stage", "has_action_stage", "has_moderate_stage", "has_major_stage"):
         coverage[col] = coverage[col].fillna(False)
 
-    # Log warnings for sites missing data
-    no_stage = coverage.loc[~coverage["has_stage_data"], "site_no"].tolist()
-    no_flood = coverage.loc[~coverage["has_flood_stage"], "site_no"].tolist()
-    no_action = coverage.loc[~coverage["has_action_stage"], "site_no"].tolist()
-
-    if no_stage:
-        logger.warning("No stage (gage height) data:   %s", no_stage)
-    if no_flood:
-        logger.warning("No flood stage threshold:      %s", no_flood)
-    if no_action:
-        logger.warning("No action stage threshold:     %s", no_action)
+    # Reach ID availability from gauge_map (includes NLDI-resolved sites)
+    if not gauge_map.empty:
+        reach_coverage = (
+            gauge_map[gauge_map["reach_id"].notna()][["site_no"]]
+            .drop_duplicates()
+            .assign(has_reach_id=True)
+        )
+        coverage = coverage.merge(reach_coverage, on="site_no", how="left")
+    else:
+        coverage["has_reach_id"] = False
+    coverage["has_reach_id"] = coverage["has_reach_id"].fillna(False)
 
     out_path.mkdir(parents=True, exist_ok=True)
     parquet_file = out_path / "data_coverage.parquet"
     coverage.to_parquet(parquet_file, index=False)
     logger.info("Saved coverage summary → %s", parquet_file)
+
+
+def _validate_outputs(
+    gage_ids: list[str],
+    site_info: pd.DataFrame,
+    streamflow_df: pd.DataFrame,
+    flood_stages: pd.DataFrame,
+    gauge_map: pd.DataFrame,
+) -> None:
+    """Log output consistency checks and a pipeline-funnel summary."""
+    n_total = len(gage_ids)
+
+    n_meta = site_info["site_no"].nunique() if not site_info.empty else 0
+
+    if not streamflow_df.empty and "discharge_cfs" in streamflow_df.columns:
+        n_discharge = int(
+            streamflow_df.groupby("site_no")["discharge_cfs"]
+            .apply(lambda s: s.notna().any())
+            .sum()
+        )
+    else:
+        n_discharge = 0
+
+    if not streamflow_df.empty and "stage_ft" in streamflow_df.columns:
+        n_stage = int(
+            streamflow_df.groupby("site_no")["stage_ft"]
+            .apply(lambda s: s.notna().any())
+            .sum()
+        )
+    else:
+        n_stage = 0
+
+    n_flood_threshold = int(flood_stages["flood_stage_ft"].notna().sum()) if not flood_stages.empty else 0
+    n_reach = int(gauge_map["reach_id"].notna().sum()) if not gauge_map.empty else 0
+
+    logger.info(
+        "Pipeline funnel: %d total → %d metadata → %d discharge → "
+        "%d stage → %d flood threshold → %d reach_id",
+        n_total, n_meta, n_discharge, n_stage, n_flood_threshold, n_reach,
+    )
+
+    # Streamflow sites should be a subset of site_info
+    if not streamflow_df.empty and not site_info.empty:
+        flow_sites = set(streamflow_df["site_no"].unique())
+        meta_sites = set(site_info["site_no"].astype(str).unique())
+        orphan = flow_sites - meta_sites
+        if orphan:
+            logger.warning(
+                "%d streamflow sites missing from site_info: %s",
+                len(orphan), sorted(orphan),
+            )
+
+    # Flag any gauge_map rows where reach_id is still null after NLDI fallback
+    if not gauge_map.empty:
+        null_reach = gauge_map["reach_id"].isna().sum()
+        if null_reach:
+            logger.warning("%d sites in gauge_map have null reach_id", null_reach)
 
 
 def main():
@@ -148,12 +210,26 @@ def main():
     flood_stages = fetch_flood_stages(
         gage_ids=stage_gage_ids,
         out_path=DATA_DIR / "metadata",
+        cache_path=DATA_DIR / "metadata" / "hads_crosswalk.parquet",
     )
+
+    # Read gauge_map back from disk (written by fetch_flood_stages).
+    gauge_map_path = DATA_DIR / "metadata" / "gauge_map.parquet"
+    gauge_map = (
+        pd.read_parquet(gauge_map_path)
+        if gauge_map_path.exists()
+        else pd.DataFrame(columns=["site_no", "lid", "reach_id"])
+    )
+
+    logger.info("=" * 60)
+    logger.info("VALIDATION")
+    logger.info("=" * 60)
+    _validate_outputs(gage_ids, site_info, streamflow_df, flood_stages, gauge_map)
 
     logger.info("=" * 60)
     logger.info("DATA COVERAGE SUMMARY")
     logger.info("=" * 60)
-    _summarize_coverage(gage_ids, streamflow_df, flood_stages, DATA_DIR / "metadata")
+    _summarize_coverage(gage_ids, streamflow_df, flood_stages, gauge_map, DATA_DIR / "metadata")
 
     logger.info("Pipeline complete.")
 

@@ -16,24 +16,40 @@ Data source: NWS National Water Prediction Service (NWPS) API
   https://api.water.noaa.gov/nwps/v1/gauges
 
 Strategy:
-  1. Fetch USGS→NWS LID crosswalk from NOAA HADS
-     (https://hads.ncep.noaa.gov/USGS/ALL_USGS-HADS_SITES.txt).
+  1. Fetch USGS→NWS LID crosswalk from NOAA HADS (cached locally for
+     _HADS_CACHE_DAYS days to avoid redundant downloads).
   2. Direct lookup: site_no → LID(s). No spatial matching needed.
   3. Parallel-fetch individual NWPS records for matched LIDs.
   4. Verify the NWPS usgsId field matches the USGS site number
      (handles the ~37 sites that map to multiple LIDs).
   5. Extract flood category stage/flow values and impact statements.
+  6. NLDI fallback: for sites not matched via HADS/NWPS, query the USGS
+     NLDI API to obtain the NHDPlus COMID (= NWM reach ID) directly.
+     These sites receive NaN flood thresholds but do appear in gauge_map
+     with a reach_id so the NWM pipeline can still fetch their streamflow.
 
 Note: Only sites with observed stage data need flood stage thresholds;
   the pipeline passes only those sites (has_stage_data == True in
   data_coverage.parquet).
 
 Outputs:
-  data/metadata/flood_stages.parquet  — stage/flow thresholds + impact statements
-  data/metadata/gauge_map.parquet     — USGS site_no ↔ NWS LID ↔ NWM reachId
+  data/metadata/flood_stages.parquet    — stage/flow thresholds + impact statements
+  data/metadata/gauge_map.parquet       — USGS site_no ↔ NWS LID ↔ NWM reachId
+  data/metadata/hads_crosswalk.parquet  — cached HADS crosswalk (refreshed every
+                                          _HADS_CACHE_DAYS days)
+
+TODO: For sites with NaN flow thresholds but valid stage thresholds, apply
+  the USGS rating curve (dataretrieval.nwis.get_ratings()) to convert each
+  stage threshold to discharge. This would populate *_flow_cfs for the many
+  sites where NWPS has no rating defined, enabling direct comparison with NWM
+  streamflow. Caution: USGS rating curves may use a different stage datum than
+  the NWS threshold stages (e.g., local gage datum vs. NAVD88). Verify datum
+  consistency per site before interpolating, or offsets will propagate silently
+  into the flow estimates.
 """
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -45,18 +61,35 @@ logger = logging.getLogger(__name__)
 
 NWPS_BASE = "https://api.water.noaa.gov/nwps/v1/gauges"
 HADS_URL  = "https://hads.ncep.noaa.gov/USGS/ALL_USGS-HADS_SITES.txt"
+NLDI_BASE = "https://labs.waterdata.usgs.gov/api/nldi/linked-data/nwissite"
 
 # Concurrent workers for individual NWPS gauge record fetches.
 MAX_WORKERS = 50
 
+# Concurrent workers for NLDI fallback fetches.
+_NLDI_MAX_WORKERS = 20
 
-def _fetch_hads_crosswalk() -> pd.DataFrame:
+# Re-download the HADS crosswalk only if the cached copy is older than this.
+_HADS_CACHE_DAYS = 30
+
+
+def _fetch_hads_crosswalk(cache_path: Path | None = None) -> pd.DataFrame:
     """
     Fetch the NOAA HADS crosswalk of USGS site numbers to NWS LIDs.
+
+    If cache_path is provided and a fresh copy exists (< _HADS_CACHE_DAYS old),
+    the cached file is loaded instead of re-downloading.
 
     Returns a DataFrame with columns [site_no, lid].  Sites with multiple
     LIDs appear as multiple rows.
     """
+    if cache_path is not None and cache_path.exists():
+        age_days = (time.time() - cache_path.stat().st_mtime) / 86_400
+        if age_days < _HADS_CACHE_DAYS:
+            logger.info("  Loading HADS crosswalk from cache (%.0f days old)", age_days)
+            return pd.read_parquet(cache_path)
+        logger.info("  HADS cache is %.0f days old (> %d); re-downloading", age_days, _HADS_CACHE_DAYS)
+
     resp = requests.get(HADS_URL, timeout=30)
     resp.raise_for_status()
 
@@ -69,7 +102,32 @@ def _fetch_hads_crosswalk() -> pd.DataFrame:
         if lid and usgs:
             rows.append({"site_no": usgs, "lid": lid})
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+
+    if cache_path is not None:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(cache_path, index=False)
+        logger.info("  Saved HADS crosswalk cache → %s", cache_path)
+
+    return df
+
+
+def _fetch_nldi_comid(site_no: str) -> str | None:
+    """
+    Fetch the NHDPlus COMID (= NWM reach ID) for a USGS site via NLDI.
+
+    Returns the COMID as a string, or None on failure / not found.
+    """
+    try:
+        resp = requests.get(f"{NLDI_BASE}/USGS-{site_no}", timeout=15)
+        resp.raise_for_status()
+        features = resp.json().get("features", [])
+        if features:
+            comid = features[0]["properties"].get("comid")
+            return str(comid).strip() if comid else None
+    except requests.RequestException:
+        pass
+    return None
 
 
 def _fetch_nwps_gauge(lid: str) -> dict | None:
@@ -129,14 +187,18 @@ def _extract_stages(record: dict) -> dict:
 def fetch_flood_stages(
     gage_ids: list[str],
     out_path: Path,
+    cache_path: Path | None = None,
 ) -> pd.DataFrame:
     """
     Fetch NWS flood stage thresholds and save to Parquet.
 
     Args:
-        gage_ids:  USGS site numbers to process (should be sites with
-                   observed stage data).
-        out_path:  Directory where flood_stages.parquet will be written.
+        gage_ids:    USGS site numbers to process (should be sites with
+                     observed stage data).
+        out_path:    Directory where flood_stages.parquet will be written.
+        cache_path:  Optional path for caching the HADS crosswalk parquet.
+                     If provided and a fresh copy exists (< _HADS_CACHE_DAYS
+                     old), it is loaded from disk instead of re-downloaded.
 
     Returns:
         DataFrame with columns [site_no, action_stage_ft, flood_stage_ft,
@@ -146,6 +208,7 @@ def fetch_flood_stages(
         in gage_ids; missing values are NaN / None.
 
         Also writes gauge_map.parquet [site_no, lid, reach_id] to out_path.
+        Sites resolved via NLDI fallback appear in gauge_map with lid=None.
     """
     stage_cols = [
         "action_stage_ft", "flood_stage_ft", "moderate_stage_ft", "major_stage_ft",
@@ -160,10 +223,10 @@ def fetch_flood_stages(
     logger.info("Fetching NWPS flood stages for %d gages", len(gage_ids))
 
     # ------------------------------------------------------------------
-    # Step 1: Fetch USGS → NWS LID crosswalk from HADS
+    # Step 1: Fetch USGS → NWS LID crosswalk from HADS (cached)
     # ------------------------------------------------------------------
     try:
-        crosswalk = _fetch_hads_crosswalk()
+        crosswalk = _fetch_hads_crosswalk(cache_path=cache_path)
     except requests.RequestException as exc:
         logger.error("Failed to fetch HADS crosswalk: %s", exc)
         return empty
@@ -255,7 +318,33 @@ def fetch_flood_stages(
         seen_sites.add(site_no)
 
     # ------------------------------------------------------------------
-    # Step 5: Build output — all gage_ids present, unmatched → NaN
+    # Step 5: NLDI fallback — resolve reach_id for sites not matched
+    # via HADS/NWPS.  These sites receive NaN flood thresholds but will
+    # appear in gauge_map so the NWM pipeline can fetch their streamflow.
+    # ------------------------------------------------------------------
+    nldi_candidates = [s for s in gage_ids if s not in seen_sites]
+    if nldi_candidates:
+        logger.info(
+            "  NLDI fallback: querying %d sites without NWM reach_id...",
+            len(nldi_candidates),
+        )
+        nldi_rows = []
+        with ThreadPoolExecutor(max_workers=_NLDI_MAX_WORKERS) as ex:
+            futures = {ex.submit(_fetch_nldi_comid, s): s for s in nldi_candidates}
+            for fut in as_completed(futures):
+                site_no = futures[fut]
+                comid = fut.result()
+                if comid:
+                    nldi_rows.append({"site_no": site_no, "lid": None, "reach_id": comid})
+        n_nldi = len(nldi_rows)
+        logger.info(
+            "  NLDI fallback resolved %d/%d sites",
+            n_nldi, len(nldi_candidates),
+        )
+        gauge_map_rows.extend(nldi_rows)
+
+    # ------------------------------------------------------------------
+    # Step 6: Build output — all gage_ids present, unmatched → NaN
     # ------------------------------------------------------------------
     df = pd.DataFrame(rows) if rows else empty.copy()
     df = pd.DataFrame({"site_no": gage_ids}).merge(df, on="site_no", how="left")
