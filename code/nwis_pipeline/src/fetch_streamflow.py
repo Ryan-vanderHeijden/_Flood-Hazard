@@ -88,6 +88,13 @@ def _normalize_site_df(raw_df: pd.DataFrame) -> pd.DataFrame:
 
     df = df[_COLS]
     df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+
+    # Replace USGS no-data sentinel (-999999) with NaN
+    for col in ("discharge_cfs", "stage_ft"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+            df.loc[df[col] <= -999000, col] = float("nan")
+
     return df
 
 
@@ -137,6 +144,11 @@ def _fetch_iv_batch_window(
     )
     if stage_col is None:
         return None
+
+    # Replace USGS no-data sentinel before resampling; averaging sentinels
+    # with real values would produce fractional garbage (e.g. -791665.4).
+    iv[stage_col] = pd.to_numeric(iv[stage_col], errors="coerce")
+    iv.loc[iv[stage_col] <= -999000, stage_col] = float("nan")
 
     daily = (
         iv.groupby(["site_no", "date"])[stage_col]
