@@ -61,7 +61,7 @@ python code/nwis_pipeline/run_pipeline.py
 | 3 | Flood stage thresholds | NWS NWPS API | `data/metadata/flood_stages.parquet`, `data/metadata/gauge_map.parquet` |
 | 4 | Data coverage summary | — | `data/metadata/data_coverage.parquet` |
 
-Date ranges are derived automatically from each gage's NWIS period of record — no hardcoded start/end dates.
+Date ranges are derived automatically from each gage's NWIS period of record, using the union of the discharge (00060) and stage (00065) catalog periods — no hardcoded start/end dates.
 
 **Service 2 — stage fetch strategy (two-pass, parallelized):**
 NWIS only stores pre-computed daily means for stage (00065) at older/legacy gauges (~542 of ~1,946 in the current config). Modern gauges record stage as 15-minute instantaneous values (unit values, `uv`) with no daily mean stored.
@@ -72,10 +72,18 @@ To maximise stage coverage, Service 2 uses two passes — both parallelized with
 
 Both passes write checkpoint files to `data/streamflow/` so a re-run after a crash resumes from where it left off rather than re-fetching all data. Delete `streamflow_dv_checkpoint.parquet`, `streamflow_iv_checkpoint.parquet`, and the `*_no_data.txt` files to force a full re-fetch.
 
-Flood stage thresholds (Service 3) are fetched from the [NWS National Water Prediction Service API](https://api.water.noaa.gov/nwps/v1/gauges) using 50 parallel workers. The USGS site → NWS LID mapping is resolved via the [NOAA HADS crosswalk](https://hads.ncep.noaa.gov/USGS/ALL_USGS-HADS_SITES.txt) (~10,483 entries), covering ~84% of stage gages. Matches are verified against the NWS `usgsId` field. Only gages with observed stage data are queried. Two files are written:
+Flood stage thresholds (Service 3) are fetched from the [NWS National Water Prediction Service API](https://api.water.noaa.gov/nwps/v1/gauges) using 50 parallel workers. The USGS site → NWS LID mapping uses a two-step approach to maximise reach coverage:
+
+1. **HADS crosswalk** ([NOAA HADS](https://hads.ncep.noaa.gov/USGS/ALL_USGS-HADS_SITES.txt), ~10,483 entries) — direct `site_no → LID` lookup, covers ~84% of stage gages. Matches are verified against the NWS `usgsId` field. The crosswalk is cached locally in `data/metadata/hads_crosswalk.parquet` and refreshed every 30 days.
+2. **NLDI fallback** — for the remaining ~16% not in HADS, the [USGS NLDI API](https://labs.waterdata.usgs.gov/api/nldi/linked-data/nwissite) is queried to obtain the NHDPlus COMID (= NWM reach ID) directly. These sites receive NaN flood thresholds but appear in `gauge_map.parquet` so the NWM pipeline can still fetch their streamflow.
+
+Only gages with observed stage data are queried. Three files are written:
 
 - **`flood_stages.parquet`** — stage (ft) and flow (cfs) thresholds for action/minor/moderate/major categories, plus NWS impact statements for each category.
-- **`gauge_map.parquet`** — maps each USGS `site_no` to its NWS LID and NWM `reach_id`.
+- **`gauge_map.parquet`** — maps each USGS `site_no` to its NWS LID and NWM `reach_id`. Sites resolved via NLDI fallback have `lid = null`.
+- **`hads_crosswalk.parquet`** — cached HADS crosswalk (auto-managed; delete to force re-download).
+
+A log file (`pipeline.log`) is written alongside `run_pipeline.py` on every run.
 
 ### Inspect outputs
 
@@ -99,14 +107,13 @@ python code/nwm_pipeline/run_pipeline.py
 
 | File | Description |
 |------|-------------|
-| `data/nwm/nwm_streamflow.parquet` | Daily mean streamflow (m³/s) per site, full period of record |
+| `data/nwm/nwm_streamflow.parquet` | Daily mean streamflow per site, full period of record |
+| `data/nwm/nwm_metadata.json` | Provenance: NWM version, source URI, fetch date, site count, year range |
 | `data/nwm/checkpoints/{year}.parquet` | Per-year checkpoints — delete to re-fetch a specific year |
 
-**Output columns:** `site_no` (USGS ID), `reach_id` (NWM feature_id), `date`, `streamflow_cms` (m³/s).
+**Output columns:** `site_no` (USGS ID), `reach_id` (NWM feature_id), `date`, `streamflow_cms` (m³/s), `streamflow_cfs` (ft³/s).
 
-Streamflow is stored in NWM native units (m³/s). To convert to CFS: multiply by 35.3147.
-
-Processing is year-by-year with checkpointing and parallel execution (`_YEAR_WORKERS = 4` concurrent years by default). If the job is interrupted, restart the same command to resume from where it left off. Each worker opens its own S3 connection; raise `_YEAR_WORKERS` in `src/fetch_nwm_streamflow.py` if you have more RAM available (~250 MB peak per concurrent year at 7,000 sites).
+Processing is year-by-year with checkpointing and parallel execution (`_YEAR_WORKERS = 4` concurrent years by default). If the job is interrupted, restart the same command to resume from where it left off. Each worker opens its own S3 connection; raise `_YEAR_WORKERS` in `src/fetch_nwm_streamflow.py` if you have more RAM available (~250 MB peak per concurrent year at 7,000 sites). A log file (`pipeline.log`) is written alongside `run_pipeline.py` on every run.
 
 ---
 
