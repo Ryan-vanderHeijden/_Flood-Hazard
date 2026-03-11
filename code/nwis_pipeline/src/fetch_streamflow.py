@@ -28,6 +28,7 @@ Columns: site_no, date, discharge_cfs, discharge_cd, stage_ft, stage_cd
 """
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -44,9 +45,12 @@ _DV_MAX_WORKERS = 20        # parallel threads for DV fetch
 _DV_CHECKPOINT_EVERY = 200  # save DV checkpoint every N completed fetches
 
 # IV fetch tuning
-_IV_BATCH_SIZE = 25   # sites per get_iv() call (was 10)
-_IV_YEAR_CHUNK = 10   # years per get_iv() call (was 5)
-_IV_MAX_WORKERS = 20  # parallel threads for IV batch × window calls
+_IV_BATCH_SIZE = 25      # sites per get_iv() call
+_IV_YEAR_CHUNK = 10      # years per get_iv() call
+_IV_MAX_WORKERS = 10     # parallel threads for IV batch × window calls (reduced to avoid rate-limiting)
+_IV_MIN_START = "2000-01-01"  # NWIS IV data not reliably available before ~2000
+_IV_MAX_RETRIES = 3      # retry attempts on connection errors
+_IV_RETRY_DELAY = 3.0    # seconds between retry attempts
 
 _COLS = ["site_no", "date", "discharge_cfs", "discharge_cd", "stage_ft", "stage_cd"]
 
@@ -123,16 +127,41 @@ def _fetch_iv_batch_window(
     """
     Fetch IV stage for one (batch × window) pair and resample to daily means.
     Returns a DataFrame with columns [site_no, date, stage_ft] or None.
+    Retries up to _IV_MAX_RETRIES times on connection errors.
     """
-    try:
-        raw, _ = nwis.get_iv(
-            sites=batch,
-            parameterCd=PARAM_STAGE,
-            start=win_start,
-            end=win_end,
-        )
-    except Exception as exc:
-        logger.warning("  IV call failed (%s → %s): %s", win_start, win_end, exc)
+    last_exc: Exception | None = None
+    for attempt in range(_IV_MAX_RETRIES):
+        try:
+            raw, _ = nwis.get_iv(
+                sites=batch,
+                parameterCd=PARAM_STAGE,
+                start=win_start,
+                end=win_end,
+            )
+            break  # success
+        except Exception as exc:
+            last_exc = exc
+            exc_str = str(exc)
+            # Only retry on connection-type errors; empty-response errors are expected
+            # for windows with no data and won't succeed on retry.
+            is_connection_err = (
+                "Connection" in exc_str
+                or "ConnectionReset" in exc_str
+                or "timeout" in exc_str.lower()
+                or "RemoteDisconnected" in exc_str
+            )
+            if is_connection_err and attempt < _IV_MAX_RETRIES - 1:
+                logger.debug(
+                    "  IV call (%s → %s) attempt %d failed: %s — retrying in %.0fs",
+                    win_start, win_end, attempt + 1, exc, _IV_RETRY_DELAY,
+                )
+                time.sleep(_IV_RETRY_DELAY)
+            else:
+                logger.warning("  IV call failed (%s → %s): %s", win_start, win_end, exc)
+                return None
+    else:
+        # All retries exhausted
+        logger.warning("  IV call failed (%s → %s): %s", win_start, win_end, last_exc)
         return None
 
     if raw.empty:
@@ -179,8 +208,11 @@ def _fetch_iv_stage(site_dates: dict[str, tuple[str, str]]) -> pd.DataFrame:
 
     sites = list(site_dates.keys())
 
-    # Global date window (union of all per-site ranges)
-    global_start = min(pd.Timestamp(v[0]) for v in site_dates.values())
+    # Global date window (union of all per-site ranges, floored at IV data availability)
+    global_start = max(
+        min(pd.Timestamp(v[0]) for v in site_dates.values()),
+        pd.Timestamp(_IV_MIN_START),
+    )
     global_end   = max(pd.Timestamp(v[1]) for v in site_dates.values())
 
     windows: list[tuple[str, str]] = []
