@@ -17,6 +17,8 @@ Stage fetch strategy (two-pass):
 
 Performance notes:
   - Pass 1 and Pass 2 are both parallelized with ThreadPoolExecutor.
+  - Pass 2 dispatches one API call per (site × 2-year window) to keep
+    response sizes small and avoid NWIS connection timeouts.
   - Checkpoint files (streamflow_dv_checkpoint.parquet,
     streamflow_iv_checkpoint.parquet) are written to out_path so a re-run
     can skip already-fetched sites without repeating API calls.
@@ -46,9 +48,8 @@ _DV_MAX_WORKERS = 20        # parallel threads for DV fetch
 _DV_CHECKPOINT_EVERY = 200  # save DV checkpoint every N completed fetches
 
 # IV fetch tuning
-_IV_BATCH_SIZE = 25      # sites per get_iv() call
-_IV_YEAR_CHUNK = 10      # years per get_iv() call
-_IV_MAX_WORKERS = 10     # parallel threads for IV batch × window calls (reduced to avoid rate-limiting)
+_IV_YEAR_CHUNK = 2       # years per get_iv() call (small = small responses, fewer timeouts)
+_IV_MAX_WORKERS = 20     # parallel threads for site × window calls
 _IV_MIN_START = "2000-01-01"  # NWIS IV data not reliably available before ~2000
 _IV_MAX_RETRIES = 5      # retry attempts on connection errors
 _IV_RETRY_BASE = 4.0     # base seconds for exponential backoff (× 2^attempt + jitter)
@@ -122,11 +123,11 @@ def _fetch_dv_single(site_no: str, start: str, end: str) -> pd.DataFrame | None:
         return None
 
 
-def _fetch_iv_batch_window(
-    batch: list[str], win_start: str, win_end: str
+def _fetch_iv_site_window(
+    site_no: str, win_start: str, win_end: str
 ) -> pd.DataFrame | None:
     """
-    Fetch IV stage for one (batch × window) pair and resample to daily means.
+    Fetch IV stage for one (site × window) pair and resample to daily means.
     Returns a DataFrame with columns [site_no, date, stage_ft] or None.
     Retries up to _IV_MAX_RETRIES times on connection errors.
     """
@@ -134,7 +135,7 @@ def _fetch_iv_batch_window(
     for attempt in range(_IV_MAX_RETRIES):
         try:
             raw, _ = nwis.get_iv(
-                sites=batch,
+                sites=[site_no],
                 parameterCd=PARAM_STAGE,
                 start=win_start,
                 end=win_end,
@@ -196,7 +197,7 @@ def _fetch_iv_stage(site_dates: dict[str, tuple[str, str]]) -> pd.DataFrame:
     """
     Fetch stage from instantaneous values (15-min) and resample to daily means.
 
-    All (batch × window) pairs are dispatched concurrently via ThreadPoolExecutor.
+    All (site × window) pairs are dispatched concurrently via ThreadPoolExecutor.
 
     Args:
         site_dates: site_no → (begin_date, end_date) for sites to query.
@@ -208,30 +209,25 @@ def _fetch_iv_stage(site_dates: dict[str, tuple[str, str]]) -> pd.DataFrame:
     if not site_dates:
         return pd.DataFrame(columns=["site_no", "date", "stage_ft"])
 
-    sites = list(site_dates.keys())
+    # Build per-site (site, window_start, window_end) call list.
+    # Using per-site date ranges avoids querying years outside each gage's record.
+    iv_min = pd.Timestamp(_IV_MIN_START)
+    calls: list[tuple[str, str, str]] = []
+    for site_no, (start, end) in site_dates.items():
+        cur = max(pd.Timestamp(start), iv_min)
+        site_end = pd.Timestamp(end)
+        while cur <= site_end:
+            win_end = min(
+                cur + pd.DateOffset(years=_IV_YEAR_CHUNK) - pd.Timedelta(days=1),
+                site_end,
+            )
+            calls.append((site_no, cur.strftime("%Y-%m-%d"), win_end.strftime("%Y-%m-%d")))
+            cur = win_end + pd.Timedelta(days=1)
 
-    # Global date window (union of all per-site ranges, floored at IV data availability)
-    global_start = max(
-        min(pd.Timestamp(v[0]) for v in site_dates.values()),
-        pd.Timestamp(_IV_MIN_START),
-    )
-    global_end   = max(pd.Timestamp(v[1]) for v in site_dates.values())
-
-    windows: list[tuple[str, str]] = []
-    cur = global_start
-    while cur <= global_end:
-        win_end = min(
-            cur + pd.DateOffset(years=_IV_YEAR_CHUNK) - pd.Timedelta(days=1),
-            global_end,
-        )
-        windows.append((cur.strftime("%Y-%m-%d"), win_end.strftime("%Y-%m-%d")))
-        cur = win_end + pd.Timedelta(days=1)
-
-    batches = [sites[i : i + _IV_BATCH_SIZE] for i in range(0, len(sites), _IV_BATCH_SIZE)]
-    total_calls = len(batches) * len(windows)
+    total_calls = len(calls)
     logger.info(
-        "  IV fetch: %d sites → %d batches × %d time windows = %d API calls (workers=%d)",
-        len(sites), len(batches), len(windows), total_calls, _IV_MAX_WORKERS,
+        "  IV fetch: %d sites → %d API calls (%d-yr windows, workers=%d)",
+        len(site_dates), total_calls, _IV_YEAR_CHUNK, _IV_MAX_WORKERS,
     )
 
     frames: list[pd.DataFrame] = []
@@ -239,9 +235,8 @@ def _fetch_iv_stage(site_dates: dict[str, tuple[str, str]]) -> pd.DataFrame:
 
     with ThreadPoolExecutor(max_workers=_IV_MAX_WORKERS) as ex:
         future_map = {
-            ex.submit(_fetch_iv_batch_window, batch, ws, we): (batch, ws, we)
-            for batch in batches
-            for ws, we in windows
+            ex.submit(_fetch_iv_site_window, site_no, ws, we): (site_no, ws, we)
+            for site_no, ws, we in calls
         }
         for fut in as_completed(future_map):
             completed += 1

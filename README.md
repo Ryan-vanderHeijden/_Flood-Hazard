@@ -68,7 +68,7 @@ NWIS only stores pre-computed daily means for stage (00065) at older/legacy gaug
 
 To maximise stage coverage, Service 2 uses two passes — both parallelized with `ThreadPoolExecutor`:
 1. **Pass 1 — daily values (`get_dv`):** 20 parallel workers; picks up all gauges with a native daily mean.
-2. **Pass 2 — IV fallback (`get_iv`):** for sites still lacking stage after Pass 1, fetches the raw 15-min series and computes daily means. Requests are batched (25 sites × 10-year windows) and dispatched concurrently (20 workers). These rows are tagged `stage_cd = "iv_mean"` to distinguish them from native daily means.
+2. **Pass 2 — IV fallback (`get_iv`):** for sites still lacking stage after Pass 1, fetches the raw 15-min series and computes daily means. Requests are dispatched one site at a time in 2-year windows (20 parallel workers). Keeping calls small avoids NWIS connection timeouts that occur with large batched requests. These rows are tagged `stage_cd = "iv_mean"` to distinguish them from native daily means.
 
 Both passes write checkpoint files to `data/streamflow/` so a re-run after a crash resumes from where it left off rather than re-fetching all data. Delete `streamflow_dv_checkpoint.parquet`, `streamflow_iv_checkpoint.parquet`, and the `*_no_data.txt` files to force a full re-fetch.
 
