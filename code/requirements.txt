@@ -12,3 +12,4 @@ dask
 numpy
 pandas
 pyarrow
+plotly
