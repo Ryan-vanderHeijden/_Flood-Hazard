@@ -2,9 +2,11 @@
 Data acquisition pipeline — CIROH Flood Hazard Thresholds Project.
 
 Services run in sequence:
-  1. Site metadata  — lat, lon, elevation, drainage area, period of record
-  2. Streamflow     — daily discharge + stage from USGS NWIS (per-site date ranges)
-  3. Flood stages   — action / flood / moderate / major thresholds
+  1. Site metadata    — lat, lon, elevation, drainage area, period of record
+  2. Streamflow       — daily discharge + stage from USGS NWIS (per-site date ranges)
+  3. Flood stages     — action / flood / moderate / major thresholds (NWS NWPS)
+  4. Rating curves    — fill NaN flood flow thresholds via USGS stage-discharge ratings
+  5. Bankfull width   — estimate bankfull channel width via StreamStats regional regressions
 
 Configuration:
   Edit CONFIG_DIR / DATA_DIR as needed.
@@ -49,6 +51,8 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 from fetch_streamflow import fetch_streamflow
 from fetch_site_metadata import fetch_site_metadata
 from fetch_flood_stages import fetch_flood_stages
+from fetch_rating_curves import fill_flows_from_ratings
+from fetch_bankfull_width import fetch_bankfull_width
 
 
 def load_gage_ids(csv_path: Path) -> list[str]:
@@ -77,19 +81,20 @@ def _summarize_coverage(
     else:
         stage_coverage = pd.DataFrame({"site_no": gage_ids, "has_stage_data": False})
 
-    # Threshold availability from flood stages
+    # Threshold availability from flood stages (after rating-curve fill)
     threshold_coverage = flood_stages[["site_no"]].copy()
     threshold_coverage["has_flood_stage"] = flood_stages["flood_stage_ft"].notna()
     threshold_coverage["has_action_stage"] = flood_stages["action_stage_ft"].notna()
     threshold_coverage["has_moderate_stage"] = flood_stages["moderate_stage_ft"].notna()
     threshold_coverage["has_major_stage"] = flood_stages["major_stage_ft"].notna()
+    threshold_coverage["has_flood_flow"] = flood_stages["flood_flow_cfs"].notna()
 
     coverage = pd.DataFrame({"site_no": gage_ids}).merge(
         stage_coverage, on="site_no", how="left"
     ).merge(threshold_coverage, on="site_no", how="left")
 
     coverage["has_stage_data"] = coverage["has_stage_data"].fillna(False)
-    for col in ("has_flood_stage", "has_action_stage", "has_moderate_stage", "has_major_stage"):
+    for col in ("has_flood_stage", "has_action_stage", "has_moderate_stage", "has_major_stage", "has_flood_flow"):
         coverage[col] = coverage[col].fillna(False)
 
     # Reach ID availability from gauge_map (includes NLDI-resolved sites)
@@ -219,6 +224,23 @@ def main():
         pd.read_parquet(gauge_map_path)
         if gauge_map_path.exists()
         else pd.DataFrame(columns=["site_no", "lid", "reach_id"])
+    )
+
+    logger.info("=" * 60)
+    logger.info("SERVICE 4: Fill flood flows from USGS rating curves")
+    logger.info("=" * 60)
+    flood_stages = fill_flows_from_ratings(
+        flood_stages=flood_stages,
+        out_path=DATA_DIR / "metadata",
+    )
+
+    logger.info("=" * 60)
+    logger.info("SERVICE 5: Bankfull width from StreamStats regional regressions")
+    logger.info("=" * 60)
+    fetch_bankfull_width(
+        site_info=site_info,
+        flood_stages=flood_stages,
+        out_path=DATA_DIR / "metadata",
     )
 
     logger.info("=" * 60)

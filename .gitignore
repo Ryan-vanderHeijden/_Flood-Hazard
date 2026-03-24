@@ -40,3 +40,4 @@ build/
 # Sensitive / personal
 *.env
 secrets.*
+nihms-1938915.pdf
