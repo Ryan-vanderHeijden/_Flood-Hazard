@@ -1,39 +1,46 @@
 from __future__ import annotations
 
 """
-Service 5: Estimate bankfull channel width from USGS StreamStats regional
+Service 5: Estimate bankfull channel width from USGS StreamStats NSS regional
 regression equations.
 
 For each streamgage that has at least one flood stage threshold defined,
 bankfull width is estimated from the drainage-area-based regional regression
-equations published via the USGS StreamStats Regression Services API.
+equations published via the USGS StreamStats NSS (National Streamflow
+Statistics) API.
 
 Algorithm:
   1. Map FIPS state codes → 2-letter state abbreviations.
-  2. For each unique state, query the StreamStats API for channel-geometry
-     regression equations (bankfull width).
-  3. Select the width equation that requires only drainage area (DRNAREA),
-     preferring equations whose DA range brackets the site's drainage area.
-  4. Evaluate the power-law or log-linear equation for each site.
-  5. Write data/metadata/channel_geometry.parquet.
+  2. For each unique state, POST /scenarios/bylocation with the state centroid
+     to discover which Bieger 2015 physiographic-province equations apply.
+  3. For each discovered region, GET the full scenario object, fill DRNAREA=1,
+     and POST /scenarios/estimate to retrieve the equation string.
+  4. Select the most-specific DRNAREA-only width equation.
+  5. Evaluate the power-law equation for each site and write
+     data/metadata/channel_geometry.parquet.
 
-StreamStats API endpoint:
-  https://streamstats.usgs.gov/regressionservices/equations/byregions
-  ?rcode={state_abbrev}&statisticgroups={channelgeometry_id}&unitsystem=english
+StreamStats NSS API (base: https://streamstats.usgs.gov/nssservices):
+  GET  /statisticgroups                          → list group IDs
+  POST /scenarios/bylocation?statisticgroups=24  → region IDs for a location
+  GET  /scenarios?statisticgroups=24&regressionregions={id}  → full scenario object
+  POST /scenarios/estimate                       → compute result + equation string
+
+Note: the POST /scenarios/estimate body must be the *full* GET response object;
+a minimal body (just id + parameters) causes the server to return HTTP 500.
 
 Limitations:
-  - Not all states have published bankfull channel-geometry equations in
-    StreamStats.  Sites in those states receive NaN width.
-  - Multi-variable equations (requiring variables other than DRNAREA) are
-    skipped; only DRNAREA-only equations are applied.
-  - Extrapolation beyond the equation's DA range is applied but flagged
-    with bkfw_da_in_range = False.
+  - Sites in states without published equations receive NaN width.
+  - Only DRNAREA-only equations are applied; multi-variable equations are skipped.
+  - One equation is chosen per state (state centroid used for region selection),
+    so sites near physiographic province boundaries may use a sub-optimal region.
+  - Extrapolation beyond the equation DA range is applied but flagged with
+    bkfw_da_in_range = False.
 
 Output columns in channel_geometry.parquet:
   site_no              — USGS site number
   bankfull_width_ft    — estimated bankfull width (ft); NaN if unavailable
   bkfw_equation        — equation string as returned by StreamStats
-  bkfw_region          — StreamStats region name / code
+  bkfw_region          — StreamStats regression region name
   bkfw_da_min_sqmi     — minimum DA in equation calibration range (sq mi)
   bkfw_da_max_sqmi     — maximum DA in equation calibration range (sq mi)
   bkfw_da_in_range     — True if site DA is within calibration bounds
@@ -51,14 +58,37 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# StreamStats Regression Services base URL
-_SS_BASE = "https://streamstats.usgs.gov/regressionservices"
+# StreamStats NSS Services base URL
+_SS_BASE = "https://streamstats.usgs.gov/nssservices"
+
+# NSS statistic group ID for bankfull statistics (BNKF)
+_BNKF_GROUP_ID = 24
 
 # Concurrent workers for per-state equation fetches
 _SS_MAX_WORKERS = 10
 
-# Keywords used to identify bankfull width equations
-_WIDTH_KEYWORDS = {"bankfull width", "bankfull channel width", "bkfw", "bfw", "channel width"}
+# Approximate state centroids (lon, lat) for bylocation queries
+# Used to find which physiographic-province equation applies to each state.
+_STATE_CENTROIDS: dict[str, tuple[float, float]] = {
+    "AL": (-86.8, 32.8),  "AK": (-153.4, 64.2), "AZ": (-111.9, 34.3),
+    "AR": (-92.4, 34.8),  "CA": (-119.5, 37.2),  "CO": (-105.5, 39.0),
+    "CT": (-72.7, 41.6),  "DE": (-75.5, 39.0),   "DC": (-77.0, 38.9),
+    "FL": (-81.5, 28.7),  "GA": (-83.4, 32.6),   "HI": (-157.8, 20.3),
+    "ID": (-114.5, 44.4), "IL": (-89.2, 40.0),   "IN": (-86.3, 40.0),
+    "IA": (-93.5, 42.0),  "KS": (-98.4, 38.5),   "KY": (-84.3, 37.5),
+    "LA": (-92.0, 31.0),  "ME": (-69.4, 45.4),   "MD": (-76.6, 39.0),
+    "MA": (-71.8, 42.3),  "MI": (-84.5, 44.3),   "MN": (-94.3, 46.4),
+    "MS": (-89.7, 32.7),  "MO": (-92.5, 38.4),   "MT": (-110.4, 46.9),
+    "NE": (-99.9, 41.5),  "NV": (-116.4, 39.3),  "NH": (-71.6, 43.7),
+    "NJ": (-74.4, 40.1),  "NM": (-106.1, 34.5),  "NY": (-75.5, 42.9),
+    "NC": (-79.4, 35.5),  "ND": (-100.5, 47.5),  "OH": (-82.8, 40.4),
+    "OK": (-97.5, 35.5),  "OR": (-120.5, 44.0),  "PA": (-77.2, 40.9),
+    "RI": (-71.5, 41.7),  "SC": (-80.9, 33.8),   "SD": (-100.2, 44.4),
+    "TN": (-86.7, 35.9),  "TX": (-99.3, 31.5),   "UT": (-111.1, 39.3),
+    "VT": (-72.7, 44.1),  "VA": (-79.5, 37.5),   "WA": (-120.5, 47.5),
+    "WV": (-80.6, 38.6),  "WI": (-89.8, 44.8),   "WY": (-107.5, 43.0),
+    "PR": (-66.5, 18.2),  "VI": (-64.8, 17.7),
+}
 
 # FIPS state code (zero-padded string) → 2-letter postal abbreviation
 _FIPS_TO_STATE: dict[str, str] = {
@@ -77,51 +107,6 @@ _FIPS_TO_STATE: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
-# StreamStats API helpers
-# ---------------------------------------------------------------------------
-
-def _get_channelgeometry_group_id() -> int | None:
-    """
-    Query the StreamStats statistic-groups endpoint and return the numeric ID
-    for the channel-geometry group.
-
-    Returns None if the endpoint is unavailable or the group is not listed.
-    """
-    try:
-        resp = requests.get(f"{_SS_BASE}/statisticgroups.json", timeout=15)
-        resp.raise_for_status()
-        for group in resp.json():
-            name = group.get("name", "").lower()
-            code = group.get("code", "").lower()
-            if "channel" in name or "channel" in code or "geometry" in name:
-                gid = group.get("id") or group.get("ID")
-                logger.info("  StreamStats channel-geometry group ID: %s (%s)", gid, group.get("name"))
-                return int(gid)
-    except Exception as exc:
-        logger.debug("  Could not fetch StreamStats statistic groups: %s", exc)
-    return None
-
-
-def _fetch_state_equations(state_abbrev: str, group_id: int | str) -> list[dict] | None:
-    """
-    Fetch channel-geometry regression equations for one state from StreamStats.
-
-    Returns the parsed JSON list (may be empty) or None on HTTP/parse failure.
-    """
-    url = (
-        f"{_SS_BASE}/equations/byregions"
-        f"?rcode={state_abbrev}&statisticgroups={group_id}&unitsystem=english"
-    )
-    try:
-        resp = requests.get(url, timeout=20)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as exc:
-        logger.debug("  StreamStats equations fetch failed for %s: %s", state_abbrev, exc)
-        return None
-
-
-# ---------------------------------------------------------------------------
 # Equation parsing
 # ---------------------------------------------------------------------------
 
@@ -130,10 +115,9 @@ def _eval_equation(equation: str, variables: dict[str, float]) -> float | None:
     Evaluate a StreamStats regression equation string.
 
     Supported forms (case-insensitive):
-      0.61 * DRNAREA ^ 0.587
+      15.04 * DRNAREA ^ 0.40
       EXP(-5.06 + 1.22 * LN(DRNAREA))
-      exp(2.35 + 0.613*ln(DRNAREA))
-      (DRNAREA^0.603) * 2.56
+      3.281 * 5.90 * (2.590 * DRNAREA) ^ 0.280
 
     Args:
         equation: Equation string from the StreamStats JSON response.
@@ -175,38 +159,201 @@ def _eval_equation(equation: str, variables: dict[str, float]) -> float | None:
         return None
 
 
-def _is_width_equation(eq: dict) -> bool:
-    """True if the equation name / code looks like a bankfull-width equation."""
-    name = eq.get("name", "").lower().strip()
-    code = eq.get("code", "").lower().strip()
-    return (
-        any(k in name for k in _WIDTH_KEYWORDS)
-        or code in {"bkfw", "bfw", "bw", "bankfullwidth", "bfwidth"}
+# ---------------------------------------------------------------------------
+# NSS API helpers
+# ---------------------------------------------------------------------------
+
+def _get_bankfull_group_id() -> int:
+    """
+    Query the NSS statistic-groups endpoint and return the ID for the bankfull
+    statistics group (code BNKF).  Falls back to the known default of 24.
+    """
+    try:
+        resp = requests.get(f"{_SS_BASE}/statisticgroups", timeout=15)
+        resp.raise_for_status()
+        for group in resp.json():
+            if group.get("code", "").upper() == "BNKF":
+                gid = group.get("id")
+                logger.info("  NSS bankfull group ID: %s (%s)", gid, group.get("name"))
+                return int(gid)
+    except Exception as exc:
+        logger.debug("  Could not fetch NSS statistic groups: %s", exc)
+    logger.debug("  Falling back to default bankfull group ID %d", _BNKF_GROUP_ID)
+    return _BNKF_GROUP_ID
+
+
+def _bylocation_region_ids(lon: float, lat: float, group_id: int) -> list[int]:
+    """
+    POST /scenarios/bylocation with a tiny bounding polygon around (lon, lat)
+    and return the IDs of applicable DRNAREA-only bankfull regression regions.
+    """
+    d = 0.01  # ~1 km half-width
+    poly = {
+        "type": "Polygon",
+        "coordinates": [[[lon-d, lat-d], [lon+d, lat-d],
+                          [lon+d, lat+d], [lon-d, lat+d], [lon-d, lat-d]]],
+    }
+    try:
+        resp = requests.post(
+            f"{_SS_BASE}/scenarios/bylocation",
+            json=poly,
+            params={"statisticgroups": str(group_id), "unitsystem": "english"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        logger.debug("  bylocation failed for (%.3f, %.3f): %s", lon, lat, exc)
+        return []
+
+    rr_ids = []
+    for scenario in data:
+        for rr in scenario.get("regressionRegions", []):
+            params = rr.get("parameters", [])
+            codes = {p.get("code", "").upper() for p in params}
+            if codes == {"DRNAREA"}:
+                rr_ids.append(rr["id"])
+    return rr_ids
+
+
+def _equation_for_region(rr_id: int, group_id: int) -> dict | None:
+    """
+    Retrieve the bankfull-width equation for a given regression region ID.
+
+    Workflow:
+      1. GET /scenarios?statisticgroups={id}&regressionregions={rr_id} → full object.
+      2. Confirm the region requires only DRNAREA.
+      3. Fill DRNAREA=1.0 in the full object and POST /scenarios/estimate.
+      4. Extract the first 'width' result.
+
+    Returns an equation dict with keys: name, code, equation, independentVariables.
+    Note: the POST body must be the *full* GET response — a minimal body fails.
+    """
+    # Step 1: GET full scenario object
+    try:
+        resp = requests.get(
+            f"{_SS_BASE}/scenarios",
+            params={
+                "statisticgroups": str(group_id),
+                "regressionregions": str(rr_id),
+                "unitsystem": "english",
+            },
+            timeout=20,
+        )
+        resp.raise_for_status()
+        scenario_data = resp.json()
+    except Exception as exc:
+        logger.debug("  NSS scenario GET failed rr=%d: %s", rr_id, exc)
+        return None
+
+    if not scenario_data:
+        return None
+
+    rr_list = scenario_data[0].get("regressionRegions", [])
+    if not rr_list:
+        return None
+
+    # Confirm DRNAREA-only
+    param_codes = {
+        p.get("code", "").upper()
+        for rr in rr_list
+        for p in rr.get("parameters", [])
+    }
+    if param_codes != {"DRNAREA"}:
+        return None
+
+    rr_name = rr_list[0].get("name", "")
+    da_param = next(
+        (p for rr in rr_list for p in rr.get("parameters", [])
+         if p.get("code", "").upper() == "DRNAREA"),
+        None,
     )
+    limits = da_param.get("limits", {}) if da_param else {}
+    da_min = float(limits.get("min", float("nan")))
+    da_max = float(limits.get("max", float("nan")))
+
+    # Step 2: Fill DRNAREA=1 in the full object and POST
+    for rr in rr_list:
+        for p in rr.get("parameters", []):
+            if p.get("code", "").upper() == "DRNAREA":
+                p["value"] = 1.0
+
+    try:
+        resp2 = requests.post(
+            f"{_SS_BASE}/scenarios/estimate",
+            json=scenario_data,
+            params={"unitsystem": "english"},
+            timeout=30,
+        )
+        resp2.raise_for_status()
+        estimate = resp2.json()
+    except Exception as exc:
+        logger.debug("  NSS estimate POST failed rr=%d: %s", rr_id, exc)
+        return None
+
+    # Step 3: Find bankfull-width result
+    for sc in estimate:
+        for rr_r in sc.get("regressionRegions", []):
+            for res in rr_r.get("results", []):
+                name_lower = res.get("name", "").lower()
+                code = res.get("code", "").upper()
+                eq_str = res.get("equation", "")
+                if not eq_str:
+                    continue
+                if "width" in name_lower or code in {"BFWDTH", "BKFW", "BFW", "BW"}:
+                    return {
+                        "name":  rr_name,
+                        "code":  code,
+                        "equation": eq_str,
+                        "independentVariables": [{
+                            "code": "DRNAREA",
+                            "min":  da_min,
+                            "max":  da_max,
+                        }],
+                    }
+    return None
 
 
-def _only_needs_drnarea(eq: dict) -> bool:
-    """True if the equation's independent variables list contains only DRNAREA."""
-    ivars = eq.get("independentVariables") or []
-    if not ivars:
-        # Try to infer from the equation string itself
-        eqstr = eq.get("equation", "")
-        tokens = re.findall(r"[A-Z]{2,}", eqstr)
-        non_da = [t for t in tokens if t not in ("DRNAREA",)]
-        return len(non_da) == 0
-    codes = {v.get("code", "").upper() for v in ivars}
-    return codes == {"DRNAREA"}
-
-
-def _best_width_equation(equations: list[dict]) -> dict | None:
+def _fetch_state_equations(state_abbrev: str, group_id: int | str) -> list[dict] | None:
     """
-    Select the best bankfull-width equation from a list of equations for one region.
+    Fetch bankfull-width equations for one state from the NSS API.
 
-    Preference: DRNAREA-only equations; within those, no particular ranking
-    (typically there is only one per region).
+    Uses the state centroid to call /scenarios/bylocation, which returns the
+    physiographically-appropriate regression regions for that location.  Then
+    retrieves equation strings by GETting each region's full scenario object
+    and POSTing to /scenarios/estimate.
+
+    Returns a list of one equation dict (compatible with _build_state_equations)
+    or None if no equation could be retrieved.
     """
-    candidates = [eq for eq in equations if _is_width_equation(eq) and _only_needs_drnarea(eq)]
-    return candidates[0] if candidates else None
+    centroid = _STATE_CENTROIDS.get(state_abbrev)
+    if centroid is None:
+        logger.debug("  No centroid for state %s", state_abbrev)
+        return None
+
+    lon, lat = centroid
+    rr_ids = _bylocation_region_ids(lon, lat, int(group_id))
+    if not rr_ids:
+        logger.debug("  No DRNAREA-only regions found for %s at centroid", state_abbrev)
+        return None
+
+    # Sort: prefer more-specific (non-national USA) regions first
+    def _specificity(rr_id: int) -> int:
+        # We don't have names here; prefer IDs < 800 (most national is 798=USA)
+        return 0 if rr_id == 798 else 1
+
+    rr_ids_sorted = sorted(rr_ids, key=_specificity, reverse=True)
+
+    for rr_id in rr_ids_sorted:
+        eq = _equation_for_region(rr_id, int(group_id))
+        if eq is not None:
+            logger.debug(
+                "  %s: equation from region id=%d: %s", state_abbrev, rr_id, eq["equation"]
+            )
+            return [eq]
+
+    logger.debug("  No working equation found for %s", state_abbrev)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -218,21 +365,15 @@ def _build_state_equations(
     group_id: int | str,
 ) -> dict[str, dict | None]:
     """
-    Fetch and cache bankfull-width equations for each state abbreviation.
+    Fetch and cache the best bankfull-width equation for each state abbreviation.
 
-    Returns dict of state_abbrev → best-width-equation dict (or None).
+    Returns dict of state_abbrev → equation dict (or None).
     """
     state_eq: dict[str, dict | None] = {}
 
     def _worker(state: str) -> tuple[str, dict | None]:
-        data = _fetch_state_equations(state, group_id)
-        if not data:
-            return state, None
-        # Response is a list of region objects; each has an "equations" array
-        all_eqs: list[dict] = []
-        for region in (data if isinstance(data, list) else [data]):
-            all_eqs.extend(region.get("equations") or [])
-        best = _best_width_equation(all_eqs)
+        eq_list = _fetch_state_equations(state, group_id)
+        best = eq_list[0] if eq_list else None
         return state, best
 
     with ThreadPoolExecutor(max_workers=_SS_MAX_WORKERS) as ex:
@@ -243,7 +384,7 @@ def _build_state_equations(
 
     n_found = sum(1 for v in state_eq.values() if v is not None)
     logger.info(
-        "  StreamStats bankfull-width equations found for %d/%d states",
+        "  NSS bankfull-width equations found for %d/%d states",
         n_found, len(states),
     )
     return state_eq
@@ -305,14 +446,8 @@ def fetch_bankfull_width(
     if n_unmapped:
         logger.warning("  %d sites have unrecognised FIPS state code", n_unmapped)
 
-    # Discover StreamStats channel-geometry group ID
-    group_id = _get_channelgeometry_group_id()
-    if group_id is None:
-        logger.warning(
-            "  Could not determine StreamStats channel-geometry group ID; "
-            "trying 'channelgeometry' as fallback."
-        )
-        group_id = "channelgeometry"
+    # Discover NSS bankfull group ID
+    group_id = _get_bankfull_group_id()
 
     # Fetch equations for all states present in dataset
     states_needed = df["state_abbrev"].dropna().unique().tolist()
@@ -350,7 +485,7 @@ def fetch_bankfull_width(
             rows.append(base)
             continue
 
-        # Extract DA limits from the equation's independentVariables entry
+        # Extract DA limits
         da_min = da_max = float("nan")
         for ivar in (eq.get("independentVariables") or []):
             if ivar.get("code", "").upper() == "DRNAREA":
@@ -368,6 +503,7 @@ def fetch_bankfull_width(
             **base,
             "bankfull_width_ft": width if width is not None else float("nan"),
             "bkfw_equation":     eq.get("equation"),
+            "bkfw_region":       eq.get("name", state),
             "bkfw_da_min_sqmi":  da_min,
             "bkfw_da_max_sqmi":  da_max,
             "bkfw_da_in_range":  in_range,

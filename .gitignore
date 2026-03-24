@@ -41,3 +41,6 @@ build/
 *.env
 secrets.*
 nihms-1938915.pdf
+code/nwis_pipeline/._.DS_Store
+.gitignore
+code/nwis_pipeline/config/._gages.csv
