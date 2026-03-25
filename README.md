@@ -25,6 +25,16 @@ Key objectives:
 code/
 ├── requirements.txt       # shared dependencies for all pipelines
 ├── nwis_pipeline/         # Pipeline 1: USGS NWIS data acquisition
+│   ├── run_pipeline.py    # entry point (Services 1–6)
+│   ├── src/
+│   │   ├── fetch_site_metadata.py
+│   │   ├── fetch_streamflow.py
+│   │   ├── fetch_flood_stages.py
+│   │   ├── fetch_rating_curves.py
+│   │   ├── fetch_bankfull_width.py
+│   │   ├── fetch_NHDPlus_slope.py      # standalone — run separately
+│   │   └── compute_specific_stream_power.py  # standalone — run separately
+│   └── inspect_stream_power.ipynb
 └── nwm_pipeline/          # Pipeline 2: NWM Retrospective v3.0 streamflow
 ```
 
@@ -59,7 +69,9 @@ python code/nwis_pipeline/run_pipeline.py
 | 1 | Site metadata | USGS NWIS | `data/metadata/site_info.parquet` |
 | 2 | Daily streamflow & stage | USGS NWIS | `data/streamflow/streamflow.parquet` |
 | 3 | Flood stage thresholds | NWS NWPS API | `data/metadata/flood_stages.parquet`, `data/metadata/gauge_map.parquet` |
-| 4 | Data coverage summary | — | `data/metadata/data_coverage.parquet` |
+| 4 | Flood flows from rating curves | USGS NWIS ratings | `data/metadata/flood_stages.parquet` (updated in place) |
+| 5 | Bankfull width | USGS StreamStats NSS API | `data/metadata/channel_geometry.parquet` |
+| 6 | Data coverage summary | — | `data/metadata/data_coverage.parquet` |
 
 Date ranges are derived automatically from each gage's NWIS period of record, using the union of the discharge (00060) and stage (00065) catalog periods — no hardcoded start/end dates.
 
@@ -72,22 +84,41 @@ To maximise stage coverage, Service 2 uses two passes — both parallelized with
 
 Both passes write checkpoint files to `data/streamflow/` so a re-run after a crash resumes from where it left off rather than re-fetching all data. Delete `streamflow_dv_checkpoint.parquet`, `streamflow_iv_checkpoint.parquet`, and the `*_no_data.txt` files to force a full re-fetch.
 
-Flood stage thresholds (Service 3) are fetched from the [NWS National Water Prediction Service API](https://api.water.noaa.gov/nwps/v1/gauges) using 50 parallel workers. The USGS site → NWS LID mapping uses a two-step approach to maximise reach coverage:
+Flood stage thresholds (Service 3) are fetched from the [NWS National Water Prediction Service API](https://api.water.noaa.gov/nwps/v1/gauges) using 50 parallel workers. The USGS site → NWS LID mapping uses the NOAA HADS crosswalk (~10,483 entries, covers ~84% of stage gages). Matches are verified against the NWS `usgsId` field. The crosswalk is cached locally in `data/metadata/hads_crosswalk.parquet` and refreshed every 30 days.
 
-1. **HADS crosswalk** ([NOAA HADS](https://hads.ncep.noaa.gov/USGS/ALL_USGS-HADS_SITES.txt), ~10,483 entries) — direct `site_no → LID` lookup, covers ~84% of stage gages. Matches are verified against the NWS `usgsId` field. The crosswalk is cached locally in `data/metadata/hads_crosswalk.parquet` and refreshed every 30 days.
-2. **NLDI fallback** — for the remaining ~16% not in HADS, the [USGS NLDI API](https://labs.waterdata.usgs.gov/api/nldi/linked-data/nwissite) is queried to obtain the NHDPlus COMID (= NWM reach ID) directly. These sites receive NaN flood thresholds but appear in `gauge_map.parquet` so the NWM pipeline can still fetch their streamflow.
+Three files are written:
 
-Only gages with observed stage data are queried. Three files are written:
-
-- **`flood_stages.parquet`** — stage (ft) and flow (cfs) thresholds for action/minor/moderate/major categories, plus NWS impact statements for each category.
-- **`gauge_map.parquet`** — maps each USGS `site_no` to its NWS LID and NWM `reach_id`. Sites resolved via NLDI fallback have `lid = null`.
+- **`flood_stages.parquet`** — stage (ft) and flow (cfs) thresholds for action/minor/moderate/major categories, plus NWS impact statements.
+- **`gauge_map.parquet`** — maps each USGS `site_no` to its NWS LID and NWM `reach_id`.
 - **`hads_crosswalk.parquet`** — cached HADS crosswalk (auto-managed; delete to force re-download).
+
+**Service 4** fills `*_flow_cfs` values that are NaN after Service 3 by fetching the active USGS NWIS rating curve (`file_type="exsa"`) for each affected site (30 parallel workers). Adds `*_flow_source` columns (`"nwps"` | `"rating_curve"`) to `flood_stages.parquet`.
+
+**Service 5** estimates bankfull channel width for every gage with a defined flood stage threshold using drainage-area-based regional regression equations from the [USGS StreamStats NSS API](https://streamstats.usgs.gov/nssservices). Only DRNAREA-only equations are applied; multi-variable equations are skipped. Output: `data/metadata/channel_geometry.parquet` (columns: `site_no`, `bankfull_width_ft`, `bkfw_equation`, `bkfw_region`, `bkfw_da_min_sqmi`, `bkfw_da_max_sqmi`, `bkfw_da_in_range`).
 
 A log file (`pipeline.log`) is written alongside `run_pipeline.py` on every run.
 
+### Standalone analysis scripts
+
+Two scripts run independently of the main pipeline (not called by `run_pipeline.py`):
+
+**`src/fetch_NHDPlus_slope.py`** — fetches reach-average channel slope from NHDPlus Value Added Attributes via `pynhd`/WaterData (`nhdflowline_network`). Uses the NWM `reach_id` as the NHDPlus COMID. Queries in batches of 100, adds `nhd_slope_ft_ft` (ft/ft, dimensionless) to `channel_geometry.parquet`.
+
+```bash
+cd code/nwis_pipeline
+python src/fetch_NHDPlus_slope.py
+```
+
+**`src/compute_specific_stream_power.py`** — computes specific stream power (W/m²) at each NWS flood threshold using ω = (γ·Q·S)/w, where γ = 9800 N/m³. Requires `channel_geometry.parquet` (bankfull width + NHD slope) and `flood_stages.parquet` (flood flow thresholds). Output: `data/metadata/stream_power.parquet` (columns: `site_no`, `action_ssp_wm2`, `flood_ssp_wm2`, `moderate_ssp_wm2`, `major_ssp_wm2`).
+
+```bash
+cd code/nwis_pipeline
+python src/compute_specific_stream_power.py
+```
+
 ### Inspect outputs
 
-Open `code/nwis_pipeline/inspect_outputs.ipynb` in Jupyter to explore the fetched data.
+Open `code/nwis_pipeline/inspect_outputs.ipynb` in Jupyter to explore the pipeline outputs, or `code/nwis_pipeline/inspect_stream_power.ipynb` for specific stream power results.
 
 ---
 
@@ -120,4 +151,4 @@ Processing is year-by-year with checkpointing and parallel execution (`_YEAR_WOR
 ## Dependencies
 
 - Python 3.10+
-- See `code/requirements.txt` for the full list
+- See `code/requirements.txt` for the full list (`pynhd` required for `fetch_NHDPlus_slope.py`)
