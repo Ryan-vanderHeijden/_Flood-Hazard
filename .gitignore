@@ -5,9 +5,9 @@ code/nwis_pipeline/data/
 meeting_notes/
 memory/
 .claude/
+docs/
 
 # Files
-Project_Description.pdf
 dashboard.html
 CLAUDE.md
 TASKS.md
@@ -40,7 +40,6 @@ build/
 # Sensitive / personal
 *.env
 secrets.*
-nihms-1938915.pdf
 code/nwis_pipeline/._.DS_Store
 .gitignore
 code/nwis_pipeline/config/._gages.csv

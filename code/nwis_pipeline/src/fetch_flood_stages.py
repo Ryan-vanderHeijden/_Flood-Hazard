@@ -40,14 +40,6 @@ Outputs:
   data/metadata/hads_crosswalk.parquet  — cached HADS crosswalk (refreshed every
                                           _HADS_CACHE_DAYS days)
 
-TODO: For sites with NaN flow thresholds but valid stage thresholds, apply
-  the USGS rating curve (dataretrieval.nwis.get_ratings()) to convert each
-  stage threshold to discharge. This would populate *_flow_cfs for the many
-  sites where NWPS has no rating defined, enabling direct comparison with NWM
-  streamflow. Caution: USGS rating curves may use a different stage datum than
-  the NWS threshold stages (e.g., local gage datum vs. NAVD88). Verify datum
-  consistency per site before interpolating, or offsets will propagate silently
-  into the flow estimates.
 """
 
 import logging
