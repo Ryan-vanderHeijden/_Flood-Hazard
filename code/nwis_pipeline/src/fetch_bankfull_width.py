@@ -46,6 +46,12 @@ Output columns in channel_geometry.parquet:
   bkfw_da_in_range     — True if site DA is within calibration bounds
 """
 
+'''
+TODO:
+- fetch bankfull discharge equations (if available).
+'''
+
+
 import logging
 import math
 import re
