@@ -23,19 +23,26 @@ Key objectives:
 
 ```
 code/
-├── requirements.txt       # shared dependencies for all pipelines
-├── nwis_pipeline/         # Pipeline 1: USGS NWIS data acquisition
-│   ├── run_pipeline.py    # entry point (Services 1–6)
+├── requirements.txt           # shared dependencies for all pipelines
+├── nwis_pipeline/             # Pipeline 1: USGS NWIS data acquisition
+│   ├── run_pipeline.py        # entry point (Services 1–6)
+│   ├── run_services_4_5.py    # standalone entry point for Services 4–5 only
 │   ├── src/
 │   │   ├── fetch_site_metadata.py
 │   │   ├── fetch_streamflow.py
 │   │   ├── fetch_flood_stages.py
 │   │   ├── fetch_rating_curves.py
 │   │   ├── fetch_bankfull_width.py
-│   │   ├── fetch_NHDPlus_slope.py      # standalone — run separately
-│   │   └── compute_specific_stream_power.py  # standalone — run separately
-│   └── inspect_stream_power.ipynb
-└── nwm_pipeline/          # Pipeline 2: NWM Retrospective v3.0 streamflow
+│   │   ├── fetch_NHDPlus_slope.py              # standalone — run separately
+│   │   └── compute_specific_stream_power.py    # standalone — run separately
+│   ├── inspect_outputs.ipynb
+│   ├── inspect_stream_power.ipynb
+│   └── inspect_coverage.ipynb
+└── nwm_pipeline/              # Pipeline 2: NWM Retrospective v3.0 streamflow
+    ├── run_pipeline.py        # entry point
+    ├── src/
+    │   └── fetch_nwm_streamflow.py
+    └── inspect_nwm_results.ipynb
 ```
 
 ---
