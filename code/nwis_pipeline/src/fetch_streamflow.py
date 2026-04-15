@@ -462,6 +462,10 @@ def fetch_streamflow(
                 _merge_indicator["_merge"].values == "left_only"
             ].copy()
 
+            # Capture log values before concat changes df's length/index
+            n_filled = int(fill_mask.sum())
+            n_filled_sites = int(df.loc[fill_mask, "site_no"].nunique())
+
             if not iv_unmatched.empty:
                 iv_unmatched["discharge_cfs"] = pd.NA
                 iv_unmatched["discharge_cd"] = pd.NA
@@ -472,8 +476,8 @@ def fetch_streamflow(
             logger.info(
                 "  IV fallback filled stage for %d site-days across %d sites"
                 " (%d new rows appended for dates outside DV range)",
-                fill_mask.sum(),
-                df.loc[fill_mask, "site_no"].nunique(),
+                n_filled,
+                n_filled_sites,
                 len(iv_unmatched) if not iv_unmatched.empty else 0,
             )
         else:
