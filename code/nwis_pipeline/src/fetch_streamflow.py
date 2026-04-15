@@ -10,10 +10,13 @@ Parameters fetched:
 Stage fetch strategy (two-pass):
   1. DV (daily values): NWIS pre-computed daily means.  Only available for
      older/legacy gauges (~542 of 1 946 in current config).
-  2. IV fallback (instantaneous values): modern gauges record 15-min stage but
-     NWIS does not store a DV mean.  For sites with no DV stage, we pull the
-     raw IV series and compute daily means ourselves.  These rows are marked
-     stage_cd = "iv_mean" to distinguish them from native DV means.
+  2. IV fallback (instantaneous values): for sites with no DV stage (including
+     sites that returned no DV data at all), pull 15-min instantaneous values
+     and compute daily means.  These rows are marked stage_cd = "iv_mean".
+     IV stage rows that fall outside the DV date range (e.g. a stage sensor
+     added after a legacy gage stopped reporting DV discharge) are appended as
+     new stage-only records with NaN discharge rather than being silently
+     dropped by the merge.
 
 Performance notes:
   - Pass 1 and Pass 2 are both parallelized with ThreadPoolExecutor.
@@ -44,12 +47,12 @@ PARAM_DISCHARGE = "00060"
 PARAM_STAGE = "00065"
 
 # DV fetch tuning
-_DV_MAX_WORKERS = 20        # parallel threads for DV fetch
+_DV_MAX_WORKERS = 16        # parallel threads for DV fetch
 _DV_CHECKPOINT_EVERY = 200  # save DV checkpoint every N completed fetches
 
 # IV fetch tuning
 _IV_YEAR_CHUNK = 2       # years per get_iv() call (small = small responses, fewer timeouts)
-_IV_MAX_WORKERS = 20     # parallel threads for site × window calls
+_IV_MAX_WORKERS = 16     # parallel threads for site × window calls
 _IV_MIN_START = "2000-01-01"  # NWIS IV data not reliably available before ~2000
 _IV_MAX_RETRIES = 5      # retry attempts on connection errors
 _IV_RETRY_BASE = 4.0     # base seconds for exponential backoff (× 2^attempt + jitter)
@@ -377,12 +380,21 @@ def fetch_streamflow(
         df.groupby("site_no")["stage_ft"]
         .apply(lambda s: s.notna().any())
     )
-    no_dv_stage = dv_stage_sites[~dv_stage_sites].index.tolist()
+    no_dv_stage_in_df = dv_stage_sites[~dv_stage_sites].index.tolist()
+
+    # Bug A fix: also attempt IV for sites that returned no DV data at all
+    # (they were added to all_no_data and never appeared in df, so the groupby
+    # above never considered them).
+    no_dv_stage = no_dv_stage_in_df + [
+        s for s in all_no_data if s in site_dates
+    ]
 
     if no_dv_stage:
         logger.info(
-            "Pass 2: %d/%d sites lack DV stage — attempting IV fallback",
-            len(no_dv_stage), len(dv_stage_sites),
+            "Pass 2: %d sites lack DV stage — attempting IV fallback"
+            " (%d in df with no stage, %d with no DV data at all)",
+            len(no_dv_stage), len(no_dv_stage_in_df),
+            len(no_dv_stage) - len(no_dv_stage_in_df),
         )
 
         # Sites already handled in a previous IV run
@@ -427,16 +439,42 @@ def fetch_streamflow(
         _save_no_data_sites(all_iv_no_data, iv_nodata_file)
 
         if not iv_stage.empty:
+            # Step 1: fill IV stage onto existing DV rows (left merge).
             iv_stage_renamed = iv_stage.rename(columns={"stage_ft": "_iv_stage"})
             df = df.merge(iv_stage_renamed, on=["site_no", "date"], how="left")
             fill_mask = df["stage_ft"].isna() & df["_iv_stage"].notna()
             df.loc[fill_mask, "stage_ft"] = df.loc[fill_mask, "_iv_stage"]
             df.loc[fill_mask, "stage_cd"] = "iv_mean"
             df = df.drop(columns=["_iv_stage"])
+
+            # Bug B fix: left merge only fills dates already present in df.
+            # IV stage rows for dates outside the DV record (e.g. a stage sensor
+            # added after a legacy gage stopped reporting DV discharge, or a site
+            # with no DV data at all) are silently dropped.  Identify those rows
+            # and append them as new stage-only records (discharge = NaN).
+            _merge_indicator = iv_stage.merge(
+                df[["site_no", "date"]].drop_duplicates(),
+                on=["site_no", "date"],
+                how="left",
+                indicator=True,
+            )
+            iv_unmatched = iv_stage[
+                _merge_indicator["_merge"].values == "left_only"
+            ].copy()
+
+            if not iv_unmatched.empty:
+                iv_unmatched["discharge_cfs"] = pd.NA
+                iv_unmatched["discharge_cd"] = pd.NA
+                iv_unmatched["stage_cd"] = "iv_mean"
+                iv_unmatched = iv_unmatched[_COLS]
+                df = pd.concat([df, iv_unmatched], ignore_index=True)
+
             logger.info(
-                "  IV fallback filled stage for %d site-days across %d sites",
+                "  IV fallback filled stage for %d site-days across %d sites"
+                " (%d new rows appended for dates outside DV range)",
                 fill_mask.sum(),
                 df.loc[fill_mask, "site_no"].nunique(),
+                len(iv_unmatched) if not iv_unmatched.empty else 0,
             )
         else:
             logger.warning("  IV fallback returned no data.")
