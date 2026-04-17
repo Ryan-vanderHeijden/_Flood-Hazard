@@ -7,6 +7,7 @@ Services run in sequence:
   3. Flood stages     — action / flood / moderate / major thresholds (NWS NWPS)
   4. Rating curves    — fill NaN flood flow thresholds via USGS stage-discharge ratings
   5. Bankfull width   — estimate bankfull channel width via StreamStats regional regressions
+  6. Percentiles      — non-exceedance percentile of each flood flow threshold in observed record
 
 Configuration:
   Edit CONFIG_DIR / DATA_DIR as needed.
@@ -28,6 +29,7 @@ import pandas as pd
 BASE_DIR   = Path(__file__).parent
 CONFIG_DIR = BASE_DIR / "config"
 DATA_DIR   = BASE_DIR / "data"
+
 
 # ---------------------------------------------------------------------------
 # Logging — console + rotating log file
@@ -53,6 +55,7 @@ from fetch_site_metadata import fetch_site_metadata
 from fetch_flood_stages import fetch_flood_stages
 from fetch_rating_curves import fill_flows_from_ratings
 from fetch_bankfull_width import fetch_bankfull_width
+from compute_flood_percentiles import compute_flood_percentiles
 
 
 def load_gage_ids(csv_path: Path) -> list[str]:
@@ -240,6 +243,15 @@ def main():
     fetch_bankfull_width(
         site_info=site_info,
         flood_stages=flood_stages,
+        out_path=DATA_DIR / "metadata",
+    )
+
+    logger.info("=" * 60)
+    logger.info("SERVICE 6: Flood flow threshold percentiles")
+    logger.info("=" * 60)
+    compute_flood_percentiles(
+        streamflow_path=DATA_DIR / "streamflow",
+        flood_stages_path=DATA_DIR / "metadata",
         out_path=DATA_DIR / "metadata",
     )
 

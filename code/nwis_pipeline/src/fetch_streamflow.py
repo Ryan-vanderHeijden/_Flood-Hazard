@@ -328,6 +328,8 @@ def fetch_streamflow(
         len(remaining), len(site_dates) - len(remaining),
     )
 
+    parquet_file = out_path / "streamflow.parquet"
+
     frames: list[pd.DataFrame] = [dv_checkpoint] if not dv_checkpoint.empty else []
     no_data_sites: set[str] = set()
     completed = 0
@@ -416,6 +418,14 @@ def fetch_streamflow(
             "  IV pass: %d sites to fetch, %d already done (checkpoint/no-data)",
             len(iv_remaining), len(no_dv_stage) - len(iv_remaining),
         )
+
+        # Nothing new in either pass — return the existing parquet unchanged.
+        if not remaining and not iv_remaining and parquet_file.exists():
+            logger.info(
+                "  No new data fetched and %s already exists — skipping reassembly.",
+                parquet_file,
+            )
+            return pd.read_parquet(parquet_file)
 
         if iv_remaining:
             iv_new = _fetch_iv_stage(iv_remaining)
@@ -525,7 +535,6 @@ def fetch_streamflow(
     if missing:
         logger.warning("No data returned for: %s", sorted(missing))
 
-    parquet_file = out_path / "streamflow.parquet"
     df.to_parquet(parquet_file, index=False)
     logger.info("Saved %d rows → %s", len(df), parquet_file)
 
