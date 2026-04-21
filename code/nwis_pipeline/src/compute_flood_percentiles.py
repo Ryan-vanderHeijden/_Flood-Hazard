@@ -42,9 +42,9 @@ _PERCENTILE_COLS = [c.replace("_cfs", "_pct") for c in _THRESHOLD_COLS]
 
 
 def _pct_of_score(sorted_arr: np.ndarray, score: float) -> float:
-    """Non-exceedance percentile (0–100): fraction of values <= score."""
+    """Non-exceedance percentile (0–100) via Weibull plotting position: i / (n + 1)."""
     count = np.searchsorted(sorted_arr, score, side="right")
-    return float(count) / len(sorted_arr) * 100.0
+    return float(count) / (len(sorted_arr) + 1) * 100.0
 
 
 def compute_flood_percentiles(

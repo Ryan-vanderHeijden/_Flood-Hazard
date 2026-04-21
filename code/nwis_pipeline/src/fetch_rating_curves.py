@@ -124,18 +124,28 @@ def _process_site(
     row: pd.Series,
 ) -> tuple[str, dict[str, float]] | None:
     """
-    Worker: fetch rating curve and compute missing flow thresholds.
+    Worker: fetch rating curve and compute flow thresholds.
+
+    If any flow threshold is missing, re-derives ALL flows from the current
+    rating curve so that all thresholds for a site share a single consistent
+    source (avoids ordering violations when NWPS and rating-curve flows
+    originate from different versions of the stage-discharge relationship).
 
     Returns (site_no, {flow_col: value, ...}) or None on failure.
     """
-    # Build dict of flow_col → stage_val for NaN flows with valid stages
+    # Only proceed if at least one flow is missing (has valid stage but NaN flow)
+    needs_any = any(
+        pd.isna(row.get(flow_col)) and not pd.isna(row.get(stage_col))
+        for stage_col, flow_col in _THRESHOLD_PAIRS
+    )
+    if not needs_any:
+        return None
+
+    # Re-derive ALL flows with valid stages from the rating curve
     targets: dict[str, float] = {}
     for stage_col, flow_col in _THRESHOLD_PAIRS:
-        if pd.isna(row.get(flow_col)) and not pd.isna(row.get(stage_col)):
+        if not pd.isna(row.get(stage_col)):
             targets[flow_col] = float(row[stage_col])
-
-    if not targets:
-        return None
 
     rating = _fetch_rating(site_no)
     if rating is None:
@@ -147,7 +157,7 @@ def _process_site(
         return None
 
     logger.debug(
-        "  %s: filled %d flow threshold(s) from rating curve",
+        "  %s: derived %d flow threshold(s) from rating curve",
         site_no, len(filled),
     )
     return site_no, filled
