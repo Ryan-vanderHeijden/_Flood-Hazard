@@ -17,6 +17,7 @@ Outputs (written to out_path):
 """
 
 import logging
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -42,7 +43,9 @@ _LEVELS = ["action", "flood", "moderate", "major"]
 
 def _fetch_peaks_site(site_no: str) -> pd.DataFrame | None:
     try:
-        df, _ = nwis.get_discharge_peaks(sites=site_no)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Could not infer format")
+            df, _ = nwis.get_discharge_peaks(sites=site_no)
         if df is None or df.empty:
             return None
         df = df.reset_index()
@@ -117,6 +120,8 @@ def compute_flood_frequency(
     # Fetch peaks in parallel
     peak_frames: list[pd.DataFrame] = []
     n_empty = 0
+    n_total = len(site_ids)
+    n_done = 0
     with ThreadPoolExecutor(max_workers=_FFA_MAX_WORKERS) as pool:
         futures = {pool.submit(_fetch_peaks_site, s): s for s in site_ids}
         for future in as_completed(futures):
@@ -125,6 +130,9 @@ def compute_flood_frequency(
                 peak_frames.append(result)
             else:
                 n_empty += 1
+            n_done += 1
+            if n_done % 100 == 0 or n_done == n_total:
+                logger.info("  fetched %d/%d sites", n_done, n_total)
 
     logger.info(
         "Received peak data for %d/%d sites (%d returned nothing)",
