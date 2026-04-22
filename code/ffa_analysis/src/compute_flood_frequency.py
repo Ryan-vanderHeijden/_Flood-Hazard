@@ -144,6 +144,10 @@ def compute_flood_frequency(
     else:
         all_peaks = pd.DataFrame(columns=["site_no"])
 
+    # Normalize mixed-type object columns to string so pyarrow can serialize them.
+    for col in all_peaks.select_dtypes(include="object").columns:
+        all_peaks[col] = all_peaks[col].where(all_peaks[col].isna(), all_peaks[col].astype(str))
+
     out_path.mkdir(parents=True, exist_ok=True)
     peaks_file = out_path / "annual_peaks.parquet"
     all_peaks.to_parquet(peaks_file, index=False)
