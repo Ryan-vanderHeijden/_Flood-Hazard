@@ -28,7 +28,7 @@ import dataretrieval.nwis as nwis
 
 logger = logging.getLogger(__name__)
 
-_FFA_MAX_WORKERS = 16
+_FFA_MAX_WORKERS = 6
 _MIN_PEAKS = 10
 
 _THRESHOLD_FLOWS = [
@@ -42,14 +42,15 @@ _LEVELS = ["action", "flood", "moderate", "major"]
 
 def _fetch_peaks_site(site_no: str) -> pd.DataFrame | None:
     try:
-        df, _ = nwis.get_peaks(sites=site_no)
+        df, _ = nwis.get_discharge_peaks(sites=site_no)
         if df is None or df.empty:
             return None
         df = df.reset_index()
-        df.insert(0, "site_no", site_no)
+        if "site_no" not in df.columns:
+            df.insert(0, "site_no", site_no)
         return df
     except Exception as exc:
-        logger.warning("get_peaks failed for %s: %s", site_no, exc)
+        logger.warning("get_discharge_peaks failed for %s: %s", site_no, exc)
         return None
 
 
