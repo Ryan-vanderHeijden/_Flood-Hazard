@@ -1,6 +1,9 @@
 # Data outputs (large files, not version-controlled)
-code/nwis_pipeline/data/
-code/nwm_pipeline/data/
+# data/ffa/ is intentionally NOT ignored — FFA parquets are tracked.
+data/metadata/
+data/streamflow/
+data/nwm/
+data/test/
 
 # Folders
 meeting_notes/

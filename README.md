@@ -22,11 +22,17 @@ Key objectives:
 ## Repository Structure
 
 ```
+data/                          # all pipeline outputs (centralized, gitignored except data/ffa/)
+├── metadata/                  # site info, flood stages, gage map, geometry, percentiles
+├── streamflow/                # NWIS daily discharge + stage + checkpoints
+├── nwm/                       # NWM retrospective streamflow + per-year checkpoints
+├── ffa/                       # FFA outputs: annual_peaks.parquet, flood_frequency.parquet
+└── test/                      # small test-run outputs (10 gages)
 code/
 ├── requirements.txt           # shared dependencies for all pipelines
 ├── nwis_pipeline/             # Pipeline 1: USGS NWIS data acquisition
 │   ├── run_pipeline.py        # entry point (Services 1–6)
-│   ├── run_service_4.py       # standalone entry point for Services 4 only
+│   ├── run_service_4.py       # standalone entry point for Service 4 only
 │   ├── src/
 │   │   ├── fetch_site_metadata.py
 │   │   ├── fetch_streamflow.py
@@ -120,15 +126,13 @@ Two scripts run independently of the main pipeline (not called by `run_pipeline.
 **`src/fetch_NHDPlus_slope.py`** — fetches reach-average channel slope from NHDPlus Value Added Attributes via `pynhd`/WaterData (`nhdflowline_network`). Uses the NWM `reach_id` as the NHDPlus COMID. Queries in batches of 100, adds `nhd_slope_ft_ft` (ft/ft, dimensionless) to `channel_geometry.parquet`.
 
 ```bash
-cd code/nwis_pipeline
-python src/fetch_NHDPlus_slope.py
+python code/nwis_pipeline/src/fetch_NHDPlus_slope.py
 ```
 
 **`src/compute_specific_stream_power.py`** — computes specific stream power (W/m²) at each NWS flood threshold using ω = (γ·Q·S)/w, where γ = 9800 N/m³. Requires `channel_geometry.parquet` (bankfull width + NHD slope) and `flood_stages.parquet` (flood flow thresholds). Output: `data/metadata/stream_power.parquet` (columns: `site_no`, `action_ssp_wm2`, `flood_ssp_wm2`, `moderate_ssp_wm2`, `major_ssp_wm2`).
 
 ```bash
-cd code/nwis_pipeline
-python src/compute_specific_stream_power.py
+python code/nwis_pipeline/src/compute_specific_stream_power.py
 ```
 
 ### Inspect outputs
@@ -185,8 +189,8 @@ python code/ffa_analysis/run_ffa.py
 
 | File | Description |
 |------|-------------|
-| `data/annual_peaks.parquet` | Raw NWIS annual instantaneous peak flow records for all sites (long format) |
-| `data/flood_frequency.parquet` | LP3 fit parameters + AEP / return period per threshold, plus EMA metadata |
+| `data/ffa/annual_peaks.parquet` | Raw NWIS annual instantaneous peak flow records for all sites (long format) |
+| `data/ffa/flood_frequency.parquet` | LP3 fit parameters + AEP / return period per threshold, plus EMA metadata |
 
 **`flood_frequency.parquet` columns:**
 

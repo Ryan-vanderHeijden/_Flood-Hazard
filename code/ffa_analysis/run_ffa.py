@@ -15,8 +15,8 @@ import sys
 from pathlib import Path
 
 BASE_DIR   = Path(__file__).parent
-DATA_DIR   = BASE_DIR / "data"
-NWIS_META  = BASE_DIR.parent / "nwis_pipeline" / "data" / "metadata"
+DATA_DIR   = BASE_DIR.parent.parent / "data" / "ffa"
+NWIS_META  = BASE_DIR.parent.parent / "data" / "metadata"
 
 logging.basicConfig(
     level=logging.INFO,

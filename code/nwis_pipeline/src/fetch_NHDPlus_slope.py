@@ -34,10 +34,10 @@ import pandas as pd
 from pynhd import WaterData
 
 # ---------------------------------------------------------------------------
-# Paths  (relative to this script's location: src/)
+# Paths  (src/ → nwis_pipeline/ → code/ → project root → data/)
 # ---------------------------------------------------------------------------
 _SCRIPT_DIR = Path(__file__).parent
-DATA_DIR = _SCRIPT_DIR.parent / "data"
+DATA_DIR = _SCRIPT_DIR.parent.parent.parent / "data"
 
 # ---------------------------------------------------------------------------
 # Logging
