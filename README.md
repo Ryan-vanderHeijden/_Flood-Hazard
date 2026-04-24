@@ -26,23 +26,29 @@ code/
 ├── requirements.txt           # shared dependencies for all pipelines
 ├── nwis_pipeline/             # Pipeline 1: USGS NWIS data acquisition
 │   ├── run_pipeline.py        # entry point (Services 1–6)
-│   ├── run_services_4_5.py    # standalone entry point for Services 4–5 only
+│   ├── run_service_4.py       # standalone entry point for Services 4 only
 │   ├── src/
 │   │   ├── fetch_site_metadata.py
 │   │   ├── fetch_streamflow.py
 │   │   ├── fetch_flood_stages.py
 │   │   ├── fetch_rating_curves.py
 │   │   ├── fetch_bankfull_width.py
+│   │   ├── compute_flood_percentiles.py        # Service 6 — called by run_pipeline.py
 │   │   ├── fetch_NHDPlus_slope.py              # standalone — run separately
 │   │   └── compute_specific_stream_power.py    # standalone — run separately
 │   ├── inspect_outputs.ipynb
 │   ├── inspect_stream_power.ipynb
 │   └── inspect_coverage.ipynb
-└── nwm_pipeline/              # Pipeline 2: NWM Retrospective v3.0 streamflow
-    ├── run_pipeline.py        # entry point
+├── nwm_pipeline/              # Pipeline 2: NWM Retrospective v3.0 streamflow
+│   ├── run_pipeline.py        # entry point
+│   ├── src/
+│   │   └── fetch_nwm_streamflow.py
+│   └── inspect_nwm_results.ipynb
+└── ffa_analysis/              # Pipeline 3: Flood Frequency Analysis (LP3/EMA)
+    ├── run_ffa.py             # entry point
     ├── src/
-    │   └── fetch_nwm_streamflow.py
-    └── inspect_nwm_results.ipynb
+    │   └── compute_flood_frequency.py
+    └── inspect_ffa.ipynb
 ```
 
 ---
@@ -78,7 +84,7 @@ python code/nwis_pipeline/run_pipeline.py
 | 3 | Flood stage thresholds | NWS NWPS API | `data/metadata/flood_stages.parquet`, `data/metadata/gauge_map.parquet` |
 | 4 | Flood flows from rating curves | USGS NWIS ratings | `data/metadata/flood_stages.parquet` (updated in place) |
 | 5 | Bankfull width | USGS StreamStats NSS API | `data/metadata/channel_geometry.parquet` |
-| 6 | Data coverage summary | — | `data/metadata/data_coverage.parquet` |
+| 6 | Flood flow threshold percentiles | observed discharge record | `data/metadata/flood_threshold_percentiles.parquet` |
 
 Date ranges are derived automatically from each gage's NWIS period of record, using the union of the discharge (00060) and stage (00065) catalog periods — no hardcoded start/end dates.
 
@@ -102,6 +108,8 @@ Three files are written:
 **Service 4** fills `*_flow_cfs` values that are NaN after Service 3 by fetching the active USGS NWIS rating curve (`file_type="exsa"`) for each affected site (30 parallel workers). Adds `*_flow_source` columns (`"nwps"` | `"rating_curve"`) to `flood_stages.parquet`.
 
 **Service 5** estimates bankfull channel width for every gage with a defined flood stage threshold using drainage-area-based regional regression equations from the [USGS StreamStats NSS API](https://streamstats.usgs.gov/nssservices). Only DRNAREA-only equations are applied; multi-variable equations are skipped. Output: `data/metadata/channel_geometry.parquet` (columns: `site_no`, `bankfull_width_ft`, `bkfw_equation`, `bkfw_region`, `bkfw_da_min_sqmi`, `bkfw_da_max_sqmi`, `bkfw_da_in_range`).
+
+**Service 6** computes the non-exceedance percentile of each NWS flood flow threshold (action / flood / moderate / major) within each gage's historical daily discharge distribution using the Weibull plotting position. Sites with fewer than 3,650 valid days (~10 years) are flagged `record_ok = False`. Output: `data/metadata/flood_threshold_percentiles.parquet` (columns: `site_no`, `n_valid_days`, `record_ok`, `action_flow_pct`, `flood_flow_pct`, `moderate_flow_pct`, `major_flow_pct`).
 
 A log file (`pipeline.log`) is written alongside `run_pipeline.py` on every run.
 
@@ -152,6 +160,55 @@ python code/nwm_pipeline/run_pipeline.py
 **Output columns:** `site_no` (USGS ID), `reach_id` (NWM feature_id), `date`, `streamflow_cms` (m³/s), `streamflow_cfs` (ft³/s).
 
 Processing is year-by-year with checkpointing and parallel execution (`_YEAR_WORKERS = 4` concurrent years by default). If the job is interrupted, restart the same command to resume from where it left off. Each worker opens its own S3 connection; raise `_YEAR_WORKERS` in `src/fetch_nwm_streamflow.py` if you have more RAM available (~250 MB peak per concurrent year at 7,000 sites). A log file (`pipeline.log`) is written alongside `run_pipeline.py` on every run.
+
+---
+
+## Pipeline 3 — Flood Frequency Analysis (`code/ffa_analysis/`)
+
+Fits Log-Pearson Type III (LP3) distributions to USGS annual peak flow records for every gage with a defined NWS flood flow threshold, and evaluates each threshold's annual exceedance probability (AEP) and return period. Run this after Pipeline 1.
+
+The implementation follows **USGS Bulletin 17C (2019)** using the **Expected Moments Algorithm (EMA)** (Cohn et al., 1997):
+- Left-censored peaks (NWIS qualification code 6) are incorporated via EMA — their expected contribution below the perception threshold is added to the moment sums rather than being discarded.
+- Historical peaks (qualification code 7) extend the effective record length using a weighted historical period.
+
+### Prerequisites
+
+Pipeline 1 (`code/nwis_pipeline/`) must have run and produced `data/metadata/flood_stages.parquet` with flow threshold columns populated.
+
+### Run
+
+```bash
+python code/ffa_analysis/run_ffa.py
+```
+
+### Outputs
+
+| File | Description |
+|------|-------------|
+| `data/annual_peaks.parquet` | Raw NWIS annual instantaneous peak flow records for all sites (long format) |
+| `data/flood_frequency.parquet` | LP3 fit parameters + AEP / return period per threshold, plus EMA metadata |
+
+**`flood_frequency.parquet` columns:**
+
+| Column | Description |
+|--------|-------------|
+| `site_no` | USGS gage ID |
+| `n_peaks` | Non-censored systematic peaks used in fit |
+| `n_censored` | Code-6 censored peaks incorporated via EMA |
+| `n_hist` | Code-7 historical peaks |
+| `hist_H` | Historical period length (years) |
+| `perception_threshold_cfs` | Minimum code-6 peak value (site perception threshold) |
+| `high_censoring` | `True` if >25% of effective record is censored |
+| `record_ok` | `True` if ≥10 non-censored systematic peaks |
+| `lp3_skew`, `lp3_loc`, `lp3_scale` | LP3 distribution parameters (log10-space, `scipy.stats.pearson3`) |
+| `{level}_aep` | Annual exceedance probability at each flood threshold |
+| `{level}_return_period_yr` | Return period (years) at each flood threshold |
+
+A log file (`ffa.log`) is written alongside `run_ffa.py` on every run.
+
+### Inspect outputs
+
+Open `code/ffa_analysis/inspect_ffa.ipynb` to explore AEP results, return period distributions, and LP3 fit diagnostics.
 
 ---
 
