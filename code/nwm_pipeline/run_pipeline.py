@@ -30,10 +30,10 @@ from src.fetch_nwm_streamflow import fetch_nwm_streamflow
 _PIPELINE_DIR = Path(__file__).parent
 
 # Input: gauge_map.parquet from NWIS pipeline
-GAUGE_MAP_PATH = _PIPELINE_DIR.parent.parent / "data" / "metadata" / "gauge_map.parquet"
+GAUGE_MAP_PATH = Path("/home/ryan/data/flood_hazard/metadata/gauge_map.parquet")
 
 # Output directory for NWM data
-NWM_OUT_PATH = _PIPELINE_DIR.parent.parent / "data" / "nwm"
+NWM_OUT_PATH = Path("/home/ryan/data/flood_hazard/nwm")
 
 # Log file written alongside this script
 _LOG_FILE = _PIPELINE_DIR / "pipeline.log"

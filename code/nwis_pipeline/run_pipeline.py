@@ -28,7 +28,7 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 BASE_DIR   = Path(__file__).parent
 CONFIG_DIR = BASE_DIR / "config"
-DATA_DIR   = BASE_DIR.parent.parent / "data"
+DATA_DIR   = Path("/home/ryan/data/flood_hazard")
 
 
 # ---------------------------------------------------------------------------

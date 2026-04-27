@@ -10,7 +10,7 @@ from pathlib import Path
 import pandas as pd
 
 BASE_DIR  = Path(__file__).parent
-DATA_DIR  = BASE_DIR.parent.parent / "data" / "test"
+DATA_DIR  = Path("/home/ryan/data/flood_hazard/test")
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 from fetch_streamflow import fetch_streamflow

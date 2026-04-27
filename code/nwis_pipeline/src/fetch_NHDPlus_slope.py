@@ -37,7 +37,7 @@ from pynhd import WaterData
 # Paths  (src/ → nwis_pipeline/ → code/ → project root → data/)
 # ---------------------------------------------------------------------------
 _SCRIPT_DIR = Path(__file__).parent
-DATA_DIR = _SCRIPT_DIR.parent.parent.parent / "data"
+DATA_DIR = Path("/home/ryan/data/flood_hazard")
 
 # ---------------------------------------------------------------------------
 # Logging
