@@ -702,7 +702,7 @@ def compute_flood_frequency(
         len(fit_args), _FFA_FIT_WORKERS,
     )
     with ProcessPoolExecutor(max_workers=_FFA_FIT_WORKERS) as pool:
-        records = list(pool.map(_fit_site_worker, fit_args, chunksize=50))
+        records = list(pool.map(_fit_site_worker, fit_args, chunksize=1))
 
     result = pd.DataFrame(records)
 
