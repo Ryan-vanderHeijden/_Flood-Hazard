@@ -12,6 +12,7 @@ Usage:
 
 import logging
 import sys
+import pandas as pd
 from pathlib import Path
 
 BASE_DIR   = Path(__file__).parent
@@ -32,6 +33,7 @@ logger = logging.getLogger("ffa")
 sys.path.insert(0, str(BASE_DIR / "src"))
 from compute_flood_frequency import compute_flood_frequency
 from compute_standard_quantiles import compute_standard_quantiles
+from compute_change_analysis import compute_change_analysis
 
 
 def main():
@@ -49,6 +51,13 @@ def main():
     sq_path = DATA_DIR / "standard_quantiles.parquet"
     sq_df.to_parquet(sq_path, index=False)
     logger.info("Standard quantiles saved → %s", sq_path)
+
+    logger.info("Computing change analysis …")
+    stages = pd.read_parquet(NWIS_META / "flood_stages.parquet")
+    ca_df = compute_change_analysis(stages, sq_df)
+    ca_path = DATA_DIR / "change_analysis.parquet"
+    ca_df.to_parquet(ca_path, index=False)
+    logger.info("Change analysis saved → %s", ca_path)
 
     logger.info("Done.")
 
