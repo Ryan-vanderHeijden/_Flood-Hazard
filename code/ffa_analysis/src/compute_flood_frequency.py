@@ -12,13 +12,17 @@ and USGS Bulletin 17C (2019). Key features vs. a plain MLE fit:
   - Historical peaks (NWIS qualification code 7) incorporated with a weighted
     historical period: years in the historical period that exceed no known
     threshold are treated as censored below the minimum historical peak
+  - Multiple Grubbs-Beck Test (MGBT, Cohn et al. 2013 / B17C Chapter 5) run
+    on the uncensored systematic record to identify Potentially Influential
+    Low Floods (PILFs); PILFs are treated as left-censored in the EMA
 
 For each streamgage with at least one defined flood flow threshold, this
 module:
   1. Fetches the USGS NWIS annual instantaneous peak flow record.
   2. Classifies peaks by qualification code (systematic / censored / historical).
-  3. Fits an LP3 distribution via EMA.
-  4. Evaluates the fitted distribution at each NWS flood flow threshold to
+  3. Runs MGBT to identify additional PILFs.
+  4. Fits an LP3 distribution via EMA.
+  5. Evaluates the fitted distribution at each NWS flood flow threshold to
      produce the annual exceedance probability (AEP) and return period.
 
 Outputs (written to out_path):
@@ -27,6 +31,7 @@ Outputs (written to out_path):
                             threshold, plus EMA metadata columns
 """
 
+import functools
 import logging
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -45,6 +50,10 @@ _FFA_MAX_WORKERS = 6
 _MIN_PEAKS       = 10   # minimum non-censored systematic peaks for record_ok
 _EMA_MAX_ITER    = 50
 _EMA_TOL         = 1e-6
+
+_MGBT_ALPHA    = 0.10   # B17C recommended significance level
+_MGBT_N_SIM    = 10_000
+_MGBT_RNG_SEED = 42
 
 _THRESHOLD_FLOWS = [
     "action_flow_cfs",
@@ -79,6 +88,79 @@ def _parse_peak_cd(val) -> frozenset:
     return frozenset(codes)
 
 
+# ---------------------------------------------------------------------------
+# Multiple Grubbs-Beck Test (MGBT)
+# ---------------------------------------------------------------------------
+
+@functools.lru_cache(maxsize=512)
+def _mgbt_critical_values(n: int, alpha: float = _MGBT_ALPHA) -> np.ndarray:
+    """Monte Carlo critical values for MGBT, cached by (n, alpha).
+
+    Returns array of length floor(n/2) where cv[k-1] is the (1-alpha)
+    quantile of the null distribution of T_k = (mean - y_(k)) / std,
+    simulated under i.i.d. N(0,1).
+    """
+    kmax = n // 2
+    if kmax == 0:
+        return np.array([])
+    rng     = np.random.default_rng(_MGBT_RNG_SEED)
+    samples = rng.standard_normal((_MGBT_N_SIM, n))
+    samples.sort(axis=1)
+    means   = samples.mean(axis=1, keepdims=True)
+    stds    = samples.std(axis=1, ddof=1, keepdims=True)
+    T       = (means - samples[:, :kmax]) / stds   # shape (n_sim, kmax)
+    return np.quantile(T, 1.0 - alpha, axis=0)
+
+
+def _mgbt(log_sys: np.ndarray, alpha: float = _MGBT_ALPHA) -> int:
+    """Multiple Grubbs-Beck Test (Cohn et al. 2013, B17C Chapter 5).
+
+    Identifies Potentially Influential Low Floods (PILFs) in the
+    log10-transformed uncensored systematic peak record.
+
+    Uses a step-up procedure: starting at k=1, continue while T_k > cv_k
+    and stop at the first non-exceedance. This controls the overall Type I
+    error at alpha because entry into k >= 1 requires T_1 > cv_1, which
+    occurs with probability exactly alpha under H0.
+
+    Parameters
+    ----------
+    log_sys : log10-transformed uncensored systematic peaks (any order)
+    alpha   : significance level (B17C default 0.10)
+
+    Returns
+    -------
+    k_star : number of PILFs; the k_star smallest values in log_sys should
+             be treated as left-censored at the (k_star+1)-th value.
+    """
+    n    = len(log_sys)
+    kmax = n // 2
+    if kmax == 0:
+        return 0
+
+    y    = np.sort(log_sys)
+    xbar = float(np.mean(y))
+    s    = float(np.std(y, ddof=1))
+    if s < 1e-10:
+        return 0
+
+    T  = (xbar - y[:kmax]) / s          # T_k for k = 1 … kmax
+    cv = _mgbt_critical_values(n, alpha)
+
+    # Step-up: count consecutive exceedances from k=1
+    k_star = 0
+    for k in range(kmax):
+        if T[k] > cv[k]:
+            k_star = k + 1
+        else:
+            break
+    return k_star
+
+
+# ---------------------------------------------------------------------------
+# Peak classification
+# ---------------------------------------------------------------------------
+
 def _classify_peaks(df: pd.DataFrame) -> dict:
     """Classify annual peak records for a single site.
 
@@ -90,20 +172,27 @@ def _classify_peaks(df: pd.DataFrame) -> dict:
       1 — max daily average (not instantaneous); biases LP3 fit downward
       8 — stage only, no discharge determined; peak_va is not a flow
 
+    MGBT is then run on the remaining uncensored systematic peaks to identify
+    any additional PILFs, which are removed from sys_peaks and handled as
+    left-censored at the PILF threshold in the EMA.
+
     Returns a dict:
-      sys_peaks                : np.ndarray  — non-censored systematic flows (cfs)
+      sys_peaks                : np.ndarray  — non-censored, non-PILF systematic flows (cfs)
       cens_peaks               : np.ndarray  — code-6 perception-threshold values (cfs)
       hist_peaks               : np.ndarray  — code-7 historical flows (cfs)
-      n_sys_years              : int         — systematic record rows (censored + non-censored)
+      n_sys_years              : int         — systematic record rows (all, incl. PILFs/censored)
       hist_H                   : int         — historical period length in years (0 if none)
       n_censored               : int         — count of code-6 observations
+      n_pilf                   : int         — MGBT-identified PILFs
+      pilf_threshold_log       : float       — log10 of smallest non-PILF value (PILF PT)
       perception_threshold_cfs : float       — min code-6 value (global perception threshold)
       n_dropped                : int         — peaks dropped due to codes 1 or 8
     """
     _empty = dict(
         sys_peaks=np.array([]), cens_peaks=np.array([]),
         hist_peaks=np.array([]), n_sys_years=0, hist_H=0,
-        n_censored=0, perception_threshold_cfs=np.nan, n_dropped=0,
+        n_censored=0, n_pilf=0, pilf_threshold_log=np.nan,
+        perception_threshold_cfs=np.nan, n_dropped=0,
     )
     if df.empty or "peak_va" not in df.columns:
         return _empty
@@ -137,6 +226,17 @@ def _classify_peaks(df: pd.DataFrame) -> dict:
 
     hist_df   = df[is_hist].copy()
     hist_vals = _positive_vals(hist_df)
+
+    # --- MGBT on uncensored systematic peaks ---
+    n_pilf           = 0
+    pilf_threshold_log = np.nan
+    if len(good_vals) >= 4:
+        k_star = _mgbt(np.log10(good_vals))
+        if 0 < k_star < len(good_vals):
+            sorted_good        = np.sort(good_vals)
+            good_vals          = sorted_good[k_star:]
+            pilf_threshold_log = float(np.log10(good_vals[0]))
+            n_pilf             = k_star
 
     # Historical period length H
     # hist_start = earliest year with a code-7 peak
@@ -177,6 +277,8 @@ def _classify_peaks(df: pd.DataFrame) -> dict:
         n_sys_years=n_sys_years,
         hist_H=hist_H,
         n_censored=len(cens_vals),
+        n_pilf=n_pilf,
+        pilf_threshold_log=pilf_threshold_log,
         perception_threshold_cfs=(
             float(cens_vals.min()) if len(cens_vals) > 0 else np.nan
         ),
@@ -241,18 +343,22 @@ def _fit_lp3_ema(
     cens_peaks: np.ndarray,
     hist_peaks: np.ndarray,
     hist_H:     int,
-    max_iter:   int = _EMA_MAX_ITER,
+    n_pilf:     int   = 0,
+    pilf_PT:    float = np.nan,
+    max_iter:   int   = _EMA_MAX_ITER,
     tol:        float = _EMA_TOL,
 ) -> tuple[float, float, float] | None:
     """Fit LP3 via the Expected Moments Algorithm (B17C / Cohn et al. 1997).
 
     Parameters
     ----------
-    sys_peaks  : non-censored systematic peak flows (cfs)
-    cens_peaks : code-6 peak values, each used as a per-observation perception
-                 threshold (cfs); the minimum is used as a single-site PT
+    sys_peaks  : non-censored, non-PILF systematic peak flows (cfs)
+    cens_peaks : code-6 peak values used as perception thresholds (cfs);
+                 the minimum is used as a single-site PT
     hist_peaks : code-7 historical peak flows (cfs)
     hist_H     : historical period length in years (0 = no historical record)
+    n_pilf     : number of MGBT-identified PILFs treated as left-censored
+    pilf_PT    : log10 of the PILF perception threshold (smallest non-PILF value)
 
     Returns
     -------
@@ -274,13 +380,16 @@ def _fit_lp3_ema(
     # Single perception threshold per site: minimum code-6 value (conservative)
     PT_6 = float(log_cens.min()) if n_c > 0 else None
 
+    # MGBT PILF perception threshold (log10)
+    PT_PILF = float(pilf_PT) if n_pilf > 0 and np.isfinite(pilf_PT) else None
+
     # Historical below-threshold years: H - n_h years with peaks below the
     # minimum historical peak (PT_H = min historical log10 flow)
     PT_H = float(log_hist.min()) if n_h > 0 else None
     H_c  = max(hist_H - n_h, 0)
 
-    # Total effective record length
-    N = n_s + n_c + (hist_H if hist_H > 0 else 0)
+    # Total effective record length (PILFs count as censored years)
+    N = n_s + n_c + n_pilf + (hist_H if hist_H > 0 else 0)
     if N < 2:
         return None
 
@@ -321,6 +430,15 @@ def _fit_lp3_ema(
                 S2 += n_c * e2
                 S3 += n_c * e3
                 W  += n_c
+
+        # Contribution from MGBT PILFs (left-censored at PT_PILF)
+        if n_pilf > 0 and PT_PILF is not None:
+            e1, e2, e3 = _trunc_moments(skew, mu, sigma, PT_PILF, below=True)
+            if not any(np.isnan(x) for x in (e1, e2, e3)):
+                S1 += n_pilf * e1
+                S2 += n_pilf * e2
+                S3 += n_pilf * e3
+                W  += n_pilf
 
         # Contribution from historical below-threshold years (below PT_H)
         if H_c > 0 and PT_H is not None:
@@ -372,7 +490,7 @@ def _threshold_stats(
 
 
 # ---------------------------------------------------------------------------
-# Peak fetching (unchanged)
+# Peak fetching
 # ---------------------------------------------------------------------------
 
 def _fetch_peaks_site(site_no: str) -> pd.DataFrame | None:
@@ -411,19 +529,24 @@ def compute_flood_frequency(
         Directory where annual_peaks.parquet and flood_frequency.parquet
         are written.
     min_peaks : int
-        Minimum non-censored systematic peaks for record_ok = True.
+        Minimum non-censored, non-PILF systematic peaks for record_ok = True.
 
     Returns
     -------
     DataFrame with LP3 fit results and threshold AEPs / return periods.
 
-    New columns vs. previous version
-    ---------------------------------
-    n_censored               : int   — code-6 peaks excluded from direct fitting
+    Output columns
+    --------------
+    n_peaks                  : int   — non-censored, non-PILF systematic peaks used in fit
+    n_censored               : int   — code-6 peaks (left-censored, handled by EMA)
+    n_pilf                   : int   — MGBT-identified PILFs (left-censored at pilf_PT)
     n_hist                   : int   — code-7 historical peaks
     hist_H                   : int   — historical period length (years)
+    n_dropped                : int   — peaks removed pre-fit (codes 1 / 8)
     perception_threshold_cfs : float — minimum code-6 peak_va (site PT)
-    high_censoring           : bool  — >25 % of effective record is censored
+    high_censoring           : bool  — >25 % of effective record is censored (code-6 + PILF)
+    record_ok                : bool  — n_peaks >= min_peaks
+    degenerate_fit           : bool  — EMA diverged (loc<0.5 | scale>2 | |skew|>3)
     """
     fs_file = flood_stages_path / "flood_stages.parquet"
     if not fs_file.exists():
@@ -480,6 +603,13 @@ def compute_flood_frequency(
         for site, grp in all_peaks.groupby("site_no")
     }
 
+    _cl_empty = dict(
+        sys_peaks=np.array([]), cens_peaks=np.array([]),
+        hist_peaks=np.array([]), n_sys_years=0, hist_H=0,
+        n_censored=0, n_pilf=0, pilf_threshold_log=np.nan,
+        perception_threshold_cfs=np.nan, n_dropped=0,
+    )
+
     # Fit LP3 (EMA) and compute threshold return periods per site
     records = []
     for _, row in fs.iterrows():
@@ -488,30 +618,29 @@ def compute_flood_frequency(
         cl = (
             _classify_peaks(all_peaks_by_site[site])
             if site in all_peaks_by_site
-            else dict(
-                sys_peaks=np.array([]), cens_peaks=np.array([]),
-                hist_peaks=np.array([]), n_sys_years=0, hist_H=0,
-                n_censored=0, perception_threshold_cfs=np.nan, n_dropped=0,
-            )
+            else _cl_empty
         )
 
         n_sys      = len(cl["sys_peaks"])
         n_censored = cl["n_censored"]
+        n_pilf     = cl["n_pilf"]
         n_hist     = len(cl["hist_peaks"])
         hist_H     = cl["hist_H"]
         n_dropped  = cl["n_dropped"]
-        n_eff      = n_sys + n_censored + (hist_H if hist_H > 0 else n_hist)
+        n_eff      = n_sys + n_censored + n_pilf + (hist_H if hist_H > 0 else n_hist)
 
         base: dict = {
-            "site_no":  site,
-            "n_peaks":  n_sys,       # non-censored systematic peaks
+            "site_no":   site,
+            "n_peaks":   n_sys,       # non-censored, non-PILF systematic peaks
             "n_censored": n_censored,
-            "n_hist":   n_hist,
-            "hist_H":   hist_H,
+            "n_pilf":    n_pilf,
+            "n_hist":    n_hist,
+            "hist_H":    hist_H,
             "n_dropped": n_dropped,
             "perception_threshold_cfs": cl["perception_threshold_cfs"],
             "high_censoring": (
-                n_censored > 0 and n_censored / max(n_eff, 1) > 0.25
+                (n_censored + n_pilf) > 0
+                and (n_censored + n_pilf) / max(n_eff, 1) > 0.25
             ),
             "record_ok": n_sys >= min_peaks,
             "lp3_skew":  np.nan,
@@ -528,6 +657,8 @@ def compute_flood_frequency(
                 cl["cens_peaks"],
                 cl["hist_peaks"],
                 hist_H,
+                n_pilf=n_pilf,
+                pilf_PT=cl["pilf_threshold_log"],
             )
             if fit is not None:
                 skew, loc, scale = fit
@@ -541,13 +672,28 @@ def compute_flood_frequency(
 
     result = pd.DataFrame(records)
 
-    n_short     = int((result["n_peaks"] < min_peaks).sum())
-    n_high_cens = int(result["high_censoring"].sum())
-    n_dropped   = int(result["n_dropped"].sum())
+    # Flag degenerate EMA solutions caused by extreme censoring or data issues.
+    # Thresholds:
+    #   loc < 0.5  — mean log10 flow < 0.5 (< 3 cfs); not physical for a gauged site
+    #   scale > 2  — log10 std > 2; EMA divergence, almost always high-censoring driven
+    #   |skew| > 3 — beyond the B17C practical range for station skew
+    result["degenerate_fit"] = (
+        (result["lp3_loc"]         <  0.5) |
+        (result["lp3_scale"]       >  2.0) |
+        (result["lp3_skew"].abs()  >  3.0)
+    ).fillna(False)
+
+    n_short      = int((result["n_peaks"] < min_peaks).sum())
+    n_high_cens  = int(result["high_censoring"].sum())
+    n_dropped    = int(result["n_dropped"].sum())
+    n_pilf_total = int(result["n_pilf"].sum())
+    n_degenerate = int(result["degenerate_fit"].sum())
     logger.info(
         "EMA fit complete: %d sites, %d short record (<%d non-censored peaks), "
-        "%d high-censoring (>25%% code-6), %d peaks dropped (codes 1/8)",
-        len(result), n_short, min_peaks, n_high_cens, n_dropped,
+        "%d high-censoring (>25%% code-6+PILF), %d peaks dropped (codes 1/8), "
+        "%d PILF peaks (MGBT), %d degenerate fits (loc<0.5 | scale>2 | |skew|>3)",
+        len(result), n_short, min_peaks, n_high_cens,
+        n_dropped, n_pilf_total, n_degenerate,
     )
 
     ffa_file = out_path / "flood_frequency.parquet"
