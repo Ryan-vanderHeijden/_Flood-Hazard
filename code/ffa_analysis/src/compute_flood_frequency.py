@@ -33,8 +33,9 @@ Outputs (written to out_path):
 
 import functools
 import logging
+import os
 import warnings
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -46,14 +47,15 @@ import dataretrieval.nwis as nwis
 
 logger = logging.getLogger(__name__)
 
-_FFA_MAX_WORKERS = 6
-_MIN_PEAKS       = 10   # minimum non-censored systematic peaks for record_ok
+_FFA_FETCH_WORKERS = 10
+_FFA_FIT_WORKERS   = 10 #os.cpu_count() or 4
+_MIN_PEAKS         = 10   # minimum non-censored systematic peaks for record_ok
 _EMA_MAX_ITER    = 50
 _EMA_TOL         = 1e-6
 
 _MGBT_ALPHA    = 0.10   # B17C recommended significance level
 _MGBT_N_SIM    = 10_000
-_MGBT_RNG_SEED = 42
+_MGBT_RNG_SEED = 3
 
 _THRESHOLD_FLOWS = [
     "action_flow_cfs",
@@ -510,6 +512,75 @@ def _fetch_peaks_site(site_no: str) -> pd.DataFrame | None:
 
 
 # ---------------------------------------------------------------------------
+# Per-site worker (top-level so ProcessPoolExecutor can pickle it)
+# ---------------------------------------------------------------------------
+
+_CL_EMPTY = dict(
+    sys_peaks=np.array([]), cens_peaks=np.array([]),
+    hist_peaks=np.array([]), n_sys_years=0, hist_H=0,
+    n_censored=0, n_pilf=0, pilf_threshold_log=np.nan,
+    perception_threshold_cfs=np.nan, n_dropped=0,
+)
+
+
+def _fit_site_worker(args: tuple) -> dict:
+    """Classify peaks and fit LP3 for one site. Runs in a worker process."""
+    site, peaks_df, threshold_flows, min_peaks = args
+    # threshold_flows: (action, flood, moderate, major) in cfs, NaN where absent
+
+    cl = _classify_peaks(peaks_df) if peaks_df is not None else _CL_EMPTY
+
+    n_sys      = len(cl["sys_peaks"])
+    n_censored = cl["n_censored"]
+    n_pilf     = cl["n_pilf"]
+    n_hist     = len(cl["hist_peaks"])
+    hist_H     = cl["hist_H"]
+    n_dropped  = cl["n_dropped"]
+    n_eff      = n_sys + n_censored + n_pilf + (hist_H if hist_H > 0 else n_hist)
+
+    base: dict = {
+        "site_no":    site,
+        "n_peaks":    n_sys,
+        "n_censored": n_censored,
+        "n_pilf":     n_pilf,
+        "n_hist":     n_hist,
+        "hist_H":     hist_H,
+        "n_dropped":  n_dropped,
+        "perception_threshold_cfs": cl["perception_threshold_cfs"],
+        "high_censoring": (
+            (n_censored + n_pilf) > 0
+            and (n_censored + n_pilf) / max(n_eff, 1) > 0.25
+        ),
+        "record_ok": n_sys >= min_peaks,
+        "lp3_skew":  np.nan,
+        "lp3_loc":   np.nan,
+        "lp3_scale": np.nan,
+    }
+    for lvl in _LEVELS:
+        base[f"{lvl}_aep"]              = np.nan
+        base[f"{lvl}_return_period_yr"] = np.nan
+
+    if n_sys + n_hist >= 2:
+        fit = _fit_lp3_ema(
+            cl["sys_peaks"],
+            cl["cens_peaks"],
+            cl["hist_peaks"],
+            hist_H,
+            n_pilf=n_pilf,
+            pilf_PT=cl["pilf_threshold_log"],
+        )
+        if fit is not None:
+            skew, loc, scale = fit
+            base.update({"lp3_skew": skew, "lp3_loc": loc, "lp3_scale": scale})
+            for lvl, col, flow in zip(_LEVELS, _THRESHOLD_FLOWS, threshold_flows):
+                aep, rp = _threshold_stats(flow, skew, loc, scale)
+                base[f"{lvl}_aep"]              = aep
+                base[f"{lvl}_return_period_yr"] = rp
+
+    return base
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -517,6 +588,7 @@ def compute_flood_frequency(
     flood_stages_path: Path,
     out_path: Path,
     min_peaks: int = _MIN_PEAKS,
+    refetch: bool = False,
 ) -> pd.DataFrame:
     """Fetch annual peak flows and fit LP3 (EMA) for all sites with defined
     flood flow thresholds.
@@ -530,6 +602,9 @@ def compute_flood_frequency(
         are written.
     min_peaks : int
         Minimum non-censored, non-PILF systematic peaks for record_ok = True.
+    refetch : bool
+        If False (default) and annual_peaks.parquet already exists in out_path,
+        skip the NWIS fetch and reuse the cached file.
 
     Returns
     -------
@@ -556,119 +631,78 @@ def compute_flood_frequency(
     has_any = fs[_THRESHOLD_FLOWS].notna().any(axis=1)
     fs = fs[has_any].copy()
     site_ids = fs["site_no"].tolist()
-    logger.info(
-        "%d sites with at least one flow threshold — fetching annual peaks",
-        len(site_ids),
-    )
-
-    # Fetch peaks in parallel
-    peak_frames: list[pd.DataFrame] = []
-    n_empty, n_total, n_done = 0, len(site_ids), 0
-    with ThreadPoolExecutor(max_workers=_FFA_MAX_WORKERS) as pool:
-        futures = {pool.submit(_fetch_peaks_site, s): s for s in site_ids}
-        for future in as_completed(futures):
-            result = future.result()
-            if result is not None and not result.empty:
-                peak_frames.append(result)
-            else:
-                n_empty += 1
-            n_done += 1
-            if n_done % 100 == 0 or n_done == n_total:
-                logger.info("  fetched %d/%d sites", n_done, n_total)
-
-    logger.info(
-        "Received peak data for %d/%d sites (%d returned nothing)",
-        len(peak_frames), len(site_ids), n_empty,
-    )
-
-    if peak_frames:
-        all_peaks = pd.concat(peak_frames, ignore_index=True)
-    else:
-        all_peaks = pd.DataFrame(columns=["site_no"])
-
-    # Normalize mixed-type object columns so pyarrow can serialize them.
-    for col in all_peaks.select_dtypes(include="object").columns:
-        all_peaks[col] = all_peaks[col].where(
-            all_peaks[col].isna(), all_peaks[col].astype(str)
-        )
 
     out_path.mkdir(parents=True, exist_ok=True)
     peaks_file = out_path / "annual_peaks.parquet"
-    all_peaks.to_parquet(peaks_file, index=False)
-    logger.info("Saved annual peaks → %s  (%d rows)", peaks_file, len(all_peaks))
 
-    # Per-site full DataFrame lookup (needed for code classification)
+    if not refetch and peaks_file.exists():
+        logger.info("Loading cached annual peaks from %s", peaks_file)
+        all_peaks = pd.read_parquet(peaks_file)
+    else:
+        logger.info(
+            "%d sites with at least one flow threshold — fetching annual peaks",
+            len(site_ids),
+        )
+        peak_frames: list[pd.DataFrame] = []
+        n_empty, n_total, n_done = 0, len(site_ids), 0
+        with ThreadPoolExecutor(max_workers=_FFA_FETCH_WORKERS) as pool:
+            futures = {pool.submit(_fetch_peaks_site, s): s for s in site_ids}
+            for future in as_completed(futures):
+                result = future.result()
+                if result is not None and not result.empty:
+                    peak_frames.append(result)
+                else:
+                    n_empty += 1
+                n_done += 1
+                if n_done % 100 == 0 or n_done == n_total:
+                    logger.info("  fetched %d/%d sites", n_done, n_total)
+
+        logger.info(
+            "Received peak data for %d/%d sites (%d returned nothing)",
+            len(peak_frames), len(site_ids), n_empty,
+        )
+
+        if peak_frames:
+            all_peaks = pd.concat(peak_frames, ignore_index=True)
+        else:
+            all_peaks = pd.DataFrame(columns=["site_no"])
+
+        # Normalize mixed-type object columns so pyarrow can serialize them.
+        for col in all_peaks.select_dtypes(include="object").columns:
+            all_peaks[col] = all_peaks[col].where(
+                all_peaks[col].isna(), all_peaks[col].astype(str)
+            )
+
+        all_peaks.to_parquet(peaks_file, index=False)
+        logger.info("Saved annual peaks → %s  (%d rows)", peaks_file, len(all_peaks))
+
+    logger.info("Annual peaks: %d rows across %d sites", len(all_peaks),
+                all_peaks["site_no"].nunique())
+
+    # Per-site DataFrame lookup
     all_peaks_by_site: dict[str, pd.DataFrame] = {
         site: grp.reset_index(drop=True)
         for site, grp in all_peaks.groupby("site_no")
     }
 
-    _cl_empty = dict(
-        sys_peaks=np.array([]), cens_peaks=np.array([]),
-        hist_peaks=np.array([]), n_sys_years=0, hist_H=0,
-        n_censored=0, n_pilf=0, pilf_threshold_log=np.nan,
-        perception_threshold_cfs=np.nan, n_dropped=0,
-    )
-
-    # Fit LP3 (EMA) and compute threshold return periods per site
-    records = []
-    for _, row in fs.iterrows():
-        site = row["site_no"]
-
-        cl = (
-            _classify_peaks(all_peaks_by_site[site])
-            if site in all_peaks_by_site
-            else _cl_empty
+    # Build worker args: (site, peaks_df_or_None, threshold_flows_tuple, min_peaks)
+    fit_args = [
+        (
+            row["site_no"],
+            all_peaks_by_site.get(row["site_no"]),
+            tuple(float(row[c]) if pd.notna(row[c]) else float("nan")
+                  for c in _THRESHOLD_FLOWS),
+            min_peaks,
         )
+        for _, row in fs.iterrows()
+    ]
 
-        n_sys      = len(cl["sys_peaks"])
-        n_censored = cl["n_censored"]
-        n_pilf     = cl["n_pilf"]
-        n_hist     = len(cl["hist_peaks"])
-        hist_H     = cl["hist_H"]
-        n_dropped  = cl["n_dropped"]
-        n_eff      = n_sys + n_censored + n_pilf + (hist_H if hist_H > 0 else n_hist)
-
-        base: dict = {
-            "site_no":   site,
-            "n_peaks":   n_sys,       # non-censored, non-PILF systematic peaks
-            "n_censored": n_censored,
-            "n_pilf":    n_pilf,
-            "n_hist":    n_hist,
-            "hist_H":    hist_H,
-            "n_dropped": n_dropped,
-            "perception_threshold_cfs": cl["perception_threshold_cfs"],
-            "high_censoring": (
-                (n_censored + n_pilf) > 0
-                and (n_censored + n_pilf) / max(n_eff, 1) > 0.25
-            ),
-            "record_ok": n_sys >= min_peaks,
-            "lp3_skew":  np.nan,
-            "lp3_loc":   np.nan,
-            "lp3_scale": np.nan,
-        }
-        for lvl in _LEVELS:
-            base[f"{lvl}_aep"]              = np.nan
-            base[f"{lvl}_return_period_yr"] = np.nan
-
-        if n_sys + n_hist >= 2:
-            fit = _fit_lp3_ema(
-                cl["sys_peaks"],
-                cl["cens_peaks"],
-                cl["hist_peaks"],
-                hist_H,
-                n_pilf=n_pilf,
-                pilf_PT=cl["pilf_threshold_log"],
-            )
-            if fit is not None:
-                skew, loc, scale = fit
-                base.update({"lp3_skew": skew, "lp3_loc": loc, "lp3_scale": scale})
-                for lvl, col in zip(_LEVELS, _THRESHOLD_FLOWS):
-                    aep, rp = _threshold_stats(row[col], skew, loc, scale)
-                    base[f"{lvl}_aep"]              = aep
-                    base[f"{lvl}_return_period_yr"] = rp
-
-        records.append(base)
+    logger.info(
+        "Fitting LP3 (EMA) for %d sites using %d workers",
+        len(fit_args), _FFA_FIT_WORKERS,
+    )
+    with ProcessPoolExecutor(max_workers=_FFA_FIT_WORKERS) as pool:
+        records = list(pool.map(_fit_site_worker, fit_args, chunksize=50))
 
     result = pd.DataFrame(records)
 
