@@ -31,6 +31,7 @@ logger = logging.getLogger("ffa")
 
 sys.path.insert(0, str(BASE_DIR / "src"))
 from compute_flood_frequency import compute_flood_frequency
+from compute_standard_quantiles import compute_standard_quantiles
 
 
 def main():
@@ -38,10 +39,16 @@ def main():
     logger.info("  Input : %s", NWIS_META)
     logger.info("  Output: %s", DATA_DIR)
 
-    compute_flood_frequency(
+    ffa_df = compute_flood_frequency(
         flood_stages_path=NWIS_META,
         out_path=DATA_DIR,
     )
+
+    logger.info("Computing standard quantiles …")
+    sq_df = compute_standard_quantiles(ffa_df)
+    sq_path = DATA_DIR / "standard_quantiles.parquet"
+    sq_df.to_parquet(sq_path, index=False)
+    logger.info("Standard quantiles saved → %s", sq_path)
 
     logger.info("Done.")
 
