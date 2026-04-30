@@ -86,6 +86,10 @@ def _classify_peaks(df: pd.DataFrame) -> dict:
       6 — discharge is less than the minimum recordable value (left-censored)
       7 — historical peak (pre-gauging or outside systematic record)
 
+    Dropped before classification:
+      1 — max daily average (not instantaneous); biases LP3 fit downward
+      8 — stage only, no discharge determined; peak_va is not a flow
+
     Returns a dict:
       sys_peaks                : np.ndarray  — non-censored systematic flows (cfs)
       cens_peaks               : np.ndarray  — code-6 perception-threshold values (cfs)
@@ -94,16 +98,25 @@ def _classify_peaks(df: pd.DataFrame) -> dict:
       hist_H                   : int         — historical period length in years (0 if none)
       n_censored               : int         — count of code-6 observations
       perception_threshold_cfs : float       — min code-6 value (global perception threshold)
+      n_dropped                : int         — peaks dropped due to codes 1 or 8
     """
     _empty = dict(
         sys_peaks=np.array([]), cens_peaks=np.array([]),
         hist_peaks=np.array([]), n_sys_years=0, hist_H=0,
-        n_censored=0, perception_threshold_cfs=np.nan,
+        n_censored=0, perception_threshold_cfs=np.nan, n_dropped=0,
     )
     if df.empty or "peak_va" not in df.columns:
         return _empty
 
-    codes   = df["peak_cd"].apply(_parse_peak_cd)
+    codes = df["peak_cd"].apply(_parse_peak_cd)
+
+    # Drop daily-average (1) and stage-only (8) peaks before any further use
+    drop_mask = codes.apply(lambda c: 1 in c or 8 in c)
+    n_dropped = int(drop_mask.sum())
+    if n_dropped:
+        df    = df[~drop_mask].copy()
+        codes = codes[~drop_mask]
+
     is_hist = codes.apply(lambda c: 7 in c)
     is_cens = codes.apply(lambda c: 6 in c) & ~is_hist
 
@@ -167,6 +180,7 @@ def _classify_peaks(df: pd.DataFrame) -> dict:
         perception_threshold_cfs=(
             float(cens_vals.min()) if len(cens_vals) > 0 else np.nan
         ),
+        n_dropped=n_dropped,
     )
 
 
@@ -477,7 +491,7 @@ def compute_flood_frequency(
             else dict(
                 sys_peaks=np.array([]), cens_peaks=np.array([]),
                 hist_peaks=np.array([]), n_sys_years=0, hist_H=0,
-                n_censored=0, perception_threshold_cfs=np.nan,
+                n_censored=0, perception_threshold_cfs=np.nan, n_dropped=0,
             )
         )
 
@@ -485,6 +499,7 @@ def compute_flood_frequency(
         n_censored = cl["n_censored"]
         n_hist     = len(cl["hist_peaks"])
         hist_H     = cl["hist_H"]
+        n_dropped  = cl["n_dropped"]
         n_eff      = n_sys + n_censored + (hist_H if hist_H > 0 else n_hist)
 
         base: dict = {
@@ -493,6 +508,7 @@ def compute_flood_frequency(
             "n_censored": n_censored,
             "n_hist":   n_hist,
             "hist_H":   hist_H,
+            "n_dropped": n_dropped,
             "perception_threshold_cfs": cl["perception_threshold_cfs"],
             "high_censoring": (
                 n_censored > 0 and n_censored / max(n_eff, 1) > 0.25
@@ -527,10 +543,11 @@ def compute_flood_frequency(
 
     n_short     = int((result["n_peaks"] < min_peaks).sum())
     n_high_cens = int(result["high_censoring"].sum())
+    n_dropped   = int(result["n_dropped"].sum())
     logger.info(
         "EMA fit complete: %d sites, %d short record (<%d non-censored peaks), "
-        "%d high-censoring (>25%% code-6)",
-        len(result), n_short, min_peaks, n_high_cens,
+        "%d high-censoring (>25%% code-6), %d peaks dropped (codes 1/8)",
+        len(result), n_short, min_peaks, n_high_cens, n_dropped,
     )
 
     ffa_file = out_path / "flood_frequency.parquet"
