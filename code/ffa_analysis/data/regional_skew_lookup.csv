@@ -1,0 +1,17 @@
+state_cd,state_name,regional_skew_g,mse_regional_g,source,notes
+02,Alaska,0.18,0.12,SIR 2016-5024,"Coastal/Gulf of Alaska region (Region 2). Region 1 interior has G_r=0.54 MSE=0.45; statewide simplification uses coastal value."
+09,Connecticut,0.37,0.13,SIR 2017-5037,New England regional BGLS study (Veilleux et al. 2017). AVPnew used as MSE.
+10,Delaware,0.38,0.13,SIR 2022-5005,"Eastern Coastal Plain mean skew; MSE approximate (not directly published — use with caution)."
+17,Illinois,0.086,0.13,SIR 2019-5105,Great Lakes and Ohio River Basins regional BGLS study (Paretti et al. 2019). AVPnew used as MSE.
+18,Indiana,0.086,0.13,SIR 2019-5105,Great Lakes and Ohio River Basins regional BGLS study (Paretti et al. 2019). AVPnew used as MSE.
+23,Maine,0.37,0.13,SIR 2017-5037,New England regional BGLS study (Veilleux et al. 2017). AVPnew used as MSE.
+24,Maryland,0.38,0.13,SIR 2022-5005,"Eastern Coastal Plain mean skew; MSE approximate (not directly published — use with caution)."
+25,Massachusetts,0.37,0.13,SIR 2017-5037,New England regional BGLS study (Veilleux et al. 2017). AVPnew used as MSE.
+26,Michigan,0.086,0.13,SIR 2019-5105,Great Lakes and Ohio River Basins regional BGLS study (Paretti et al. 2019). AVPnew used as MSE.
+33,New Hampshire,0.37,0.13,SIR 2017-5037,New England regional BGLS study (Veilleux et al. 2017). AVPnew used as MSE.
+36,New York,0.32,0.11,SIR 2021-5015,"Eastern NY (HUC 02) BGLS study (Veilleux & Wagner 2021). Western NY falls under SIR 2019-5105 (G_r=0.086); statewide simplification uses eastern value."
+39,Ohio,0.086,0.13,SIR 2019-5105,Great Lakes and Ohio River Basins regional BGLS study (Paretti et al. 2019). AVPnew used as MSE.
+42,Pennsylvania,0.32,0.11,SIR 2021-5015,"Eastern PA (HUC 02) BGLS study (Veilleux & Wagner 2021). Western PA falls under SIR 2019-5105 (G_r=0.086); statewide simplification uses eastern value."
+44,Rhode Island,0.37,0.13,SIR 2017-5037,New England regional BGLS study (Veilleux et al. 2017). AVPnew used as MSE.
+50,Vermont,0.37,0.13,SIR 2017-5037,New England regional BGLS study (Veilleux et al. 2017). AVPnew used as MSE.
+55,Wisconsin,0.086,0.13,SIR 2019-5105,Great Lakes and Ohio River Basins regional BGLS study (Paretti et al. 2019). AVPnew used as MSE.

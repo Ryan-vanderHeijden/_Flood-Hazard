@@ -65,6 +65,8 @@ _THRESHOLD_FLOWS = [
 ]
 _LEVELS = ["action", "flood", "moderate", "major"]
 
+_REGIONAL_SKEW_FILE = Path(__file__).parent.parent / "data" / "regional_skew_lookup.csv"
+
 
 # ---------------------------------------------------------------------------
 # Qualification-code parsing
@@ -492,6 +494,126 @@ def _threshold_stats(
 
 
 # ---------------------------------------------------------------------------
+# Regional / weighted skew (B17C Section 4.5)
+# ---------------------------------------------------------------------------
+
+def _mse_station_skew(g_s: float, n: int) -> float:
+    """MSE of the station skew coefficient (Wallis et al. 1974, B17C Sec. 4.5).
+
+    Valid for n >= 3; clamps n to avoid division by zero or negative variance.
+    """
+    n = max(int(n), 3)
+    base = (6.0 * n * (n - 1)) / ((n - 2) * (n + 1) * (n + 3))
+    correction = 1.0 + 6.0 * g_s / n**0.5 + (7.0 / 2.0) * g_s**2 / n
+    # Correction can go negative for extreme skew + tiny n; floor at base.
+    return base * max(correction, 1.0)
+
+
+def _load_site_info(flood_stages_path: Path) -> pd.DataFrame:
+    """Load site metadata from the project metadata directory.
+
+    Returns a DataFrame with site_no and state_cd (zero-padded 2-digit FIPS string).
+    """
+    path = flood_stages_path / "site_info.parquet"
+    if not path.exists():
+        logger.warning("site_info.parquet not found at %s; weighted skew disabled.", path)
+        return pd.DataFrame(columns=["site_no", "state_cd"])
+    info = pd.read_parquet(path, columns=["site_no", "state_cd"])
+    info["state_cd"] = info["state_cd"].astype(str).str.zfill(2)
+    logger.info("Loaded site info from %s (%d sites)", path, len(info))
+    return info
+
+
+def _apply_weighted_skew(
+    result: pd.DataFrame,
+    flood_stages: pd.DataFrame,
+    site_info: pd.DataFrame,
+    regional_skew: pd.DataFrame,
+) -> pd.DataFrame:
+    """Add B17C weighted skew columns and recompute threshold AEPs.
+
+    Joins result → site_info (state_cd) → regional_skew (G_r, MSE_r), then
+    computes the inverse-variance weighted skew (B17C Eq. 4-3) and updates the
+    threshold AEP / return-period columns to use G_w instead of station skew.
+
+    New columns added to result:
+        regional_skew_g    — G_r from state lookup (NaN if state not matched)
+        mse_regional_g     — MSE of G_r (NaN if state not matched)
+        mse_station_skew   — MSE of station skew from Wallis et al. formula
+        lp3_weighted_skew  — B17C Eq. 4-3 weighted skew G_w
+
+    lp3_skew is preserved unchanged (station skew from EMA, diagnostic use).
+    Threshold AEP / return-period columns are recomputed using G_w.
+    """
+    result = result.copy()
+
+    # --- Join state and regional skew ---
+    if "site_no" in site_info.columns and "state_cd" in site_info.columns:
+        result = result.merge(
+            site_info[["site_no", "state_cd"]], on="site_no", how="left"
+        )
+    else:
+        result["state_cd"] = np.nan
+
+    if not regional_skew.empty and "state_cd" in regional_skew.columns:
+        result = result.merge(
+            regional_skew[["state_cd", "regional_skew_g", "mse_regional_g"]],
+            on="state_cd",
+            how="left",
+        )
+    else:
+        result["regional_skew_g"] = np.nan
+        result["mse_regional_g"]  = np.nan
+
+    # --- Compute weighted skew row-by-row ---
+    weighted_skews = []
+    mse_stations   = []
+    for row in result.itertuples(index=False):
+        g_s = getattr(row, "lp3_skew", np.nan)
+        n   = int(getattr(row, "n_peaks", 0) or 0)
+        g_r = getattr(row, "regional_skew_g", np.nan)
+        v_r = getattr(row, "mse_regional_g", np.nan)
+
+        if not (np.isfinite(g_s) and n >= 3 and np.isfinite(g_r) and np.isfinite(v_r) and v_r > 0):
+            weighted_skews.append(g_s)   # fall back to station skew
+            mse_stations.append(np.nan)
+            continue
+
+        v_s = _mse_station_skew(g_s, n)
+        g_w = (v_r * g_s + v_s * g_r) / (v_r + v_s)
+        weighted_skews.append(g_w)
+        mse_stations.append(v_s)
+
+    result["mse_station_skew"]  = mse_stations
+    result["lp3_weighted_skew"] = weighted_skews
+
+    # --- Recompute threshold AEPs using weighted skew ---
+    # Bring in the original threshold flow values so we can re-evaluate AEPs.
+    flows = flood_stages[["site_no"] + _THRESHOLD_FLOWS].set_index("site_no")
+    result = result.set_index("site_no")
+    for lvl, flow_col in zip(_LEVELS, _THRESHOLD_FLOWS):
+        aep_col = f"{lvl}_aep"
+        rp_col  = f"{lvl}_return_period_yr"
+        new_aeps, new_rps = [], []
+        for site_no, row in result.iterrows():
+            g_w   = row.get("lp3_weighted_skew", np.nan)
+            loc   = row.get("lp3_loc", np.nan)
+            scale = row.get("lp3_scale", np.nan)
+            flow  = flows.at[site_no, flow_col] if site_no in flows.index else np.nan
+            if np.isfinite(g_w) and np.isfinite(loc) and np.isfinite(scale):
+                aep, rp = _threshold_stats(flow, g_w, loc, scale)
+            else:
+                aep, rp = np.nan, np.nan
+            new_aeps.append(aep)
+            new_rps.append(rp)
+        result[aep_col] = new_aeps
+        result[rp_col]  = new_rps
+    result = result.reset_index()
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Peak fetching
 # ---------------------------------------------------------------------------
 
@@ -705,6 +827,30 @@ def compute_flood_frequency(
         records = list(pool.map(_fit_site_worker, fit_args, chunksize=1))
 
     result = pd.DataFrame(records)
+
+    # --- Apply B17C weighted skew (station skew + regional skew) ---
+    site_info = _load_site_info(flood_stages_path)
+    if _REGIONAL_SKEW_FILE.exists():
+        regional_skew = pd.read_csv(
+            _REGIONAL_SKEW_FILE, dtype={"state_cd": str}
+        )
+        logger.info(
+            "Loaded regional skew lookup: %d states", len(regional_skew)
+        )
+    else:
+        logger.warning(
+            "Regional skew lookup not found at %s; using station skew only.",
+            _REGIONAL_SKEW_FILE,
+        )
+        regional_skew = pd.DataFrame(
+            columns=["state_cd", "regional_skew_g", "mse_regional_g"]
+        )
+    result = _apply_weighted_skew(result, fs, site_info, regional_skew)
+    n_weighted = int(result["regional_skew_g"].notna().sum())
+    logger.info(
+        "Weighted skew applied: %d/%d sites matched a regional skew study",
+        n_weighted, len(result),
+    )
 
     # Flag degenerate EMA solutions caused by extreme censoring or data issues.
     # Thresholds:

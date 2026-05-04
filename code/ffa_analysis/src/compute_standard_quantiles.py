@@ -32,12 +32,22 @@ def compute_standard_quantiles(
     """
     eligible = ffa[(ffa["record_ok"] == True) & (~ffa["degenerate_fit"])]
 
+    skew_col = (
+        "lp3_weighted_skew"
+        if "lp3_weighted_skew" in eligible.columns
+        else "lp3_skew"
+    )
+    logger.info("Using '%s' for standard quantile computation.", skew_col)
+
     records = []
     for row in eligible.itertuples(index=False):
         rec: dict = {"site_no": row.site_no}
+        skew = getattr(row, skew_col, np.nan)
+        if not np.isfinite(skew):
+            skew = row.lp3_skew  # fall back to station skew if weighted is NaN
         for rp in return_periods:
             aep = 1.0 / rp
-            log_q = pearson3.ppf(1.0 - aep, row.lp3_skew, row.lp3_loc, row.lp3_scale)
+            log_q = pearson3.ppf(1.0 - aep, skew, row.lp3_loc, row.lp3_scale)
             rec[f"q{rp}_cfs"] = float(10.0 ** log_q)
         records.append(rec)
 
