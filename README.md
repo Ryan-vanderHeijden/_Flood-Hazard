@@ -23,7 +23,7 @@ Key objectives:
 
 ```
 data/                          # all pipeline outputs (centralized, gitignored except data/ffa/)
-├── metadata/                  # site info, flood stages, gage map, geometry, percentiles
+├── metadata/                  # site info, flood stages, gage map, geometry, percentiles, impact tags
 ├── streamflow/                # NWIS daily discharge + stage + checkpoints
 ├── nwm/                       # NWM retrospective streamflow + per-year checkpoints
 ├── ffa/                       # FFA outputs: annual_peaks.parquet, flood_frequency.parquet
@@ -50,11 +50,24 @@ code/
 │   ├── src/
 │   │   └── fetch_nwm_streamflow.py
 │   └── inspect_nwm_results.ipynb
-└── ffa_analysis/              # Pipeline 3: Flood Frequency Analysis (LP3/EMA)
+└── ffa_analysis/              # Pipeline 3: Flood Frequency Analysis + impact analysis
     ├── run_ffa.py             # entry point
     ├── src/
-    │   └── compute_flood_frequency.py
-    └── inspect_ffa.ipynb
+    │   ├── compute_flood_frequency.py
+    │   ├── compute_standard_quantiles.py
+    │   ├── compute_ppcc.py
+    │   └── compute_change_analysis.py
+    ├── data/
+    │   └── regional_skew_lookup.csv
+    ├── clustering/            # spatial clustering of FFA results
+    │   ├── ffa_clustering.ipynb
+    │   ├── skater_clustering.ipynb
+    │   └── connectivity_graph_viz.ipynb
+    ├── inspect_ffa.ipynb
+    ├── basin_characteristics_analysis.ipynb
+    ├── flood_impact_tfidf.ipynb      # TF-IDF exploration of NWS impact text
+    ├── flood_impact_extraction.py    # LLM tag extraction via Anthropic Batch API
+    └── flood_impact_viz.ipynb        # tag transition profiles + geographic maps
 ```
 
 ---
@@ -213,6 +226,70 @@ A log file (`ffa.log`) is written alongside `run_ffa.py` on every run.
 ### Inspect outputs
 
 Open `code/ffa_analysis/inspect_ffa.ipynb` to explore AEP results, return period distributions, and LP3 fit diagnostics.
+
+---
+
+## Analysis — Basin Characteristics (`code/ffa_analysis/basin_characteristics_analysis.ipynb`)
+
+Exploratory analysis of relationships between basin physical characteristics (drainage area, slope, channel geometry, stream power) and flood return periods from the FFA results. Sites are joined to NHDPlus via NWM COMID. ~2,235 sites pass QC filters.
+
+---
+
+## Analysis — Spatial Clustering (`code/ffa_analysis/clustering/`)
+
+Regionalization of FFA results using spatially-constrained clustering to identify homogeneous flood frequency regions.
+
+- **`ffa_clustering.ipynb`** — initial exploration of Ward linkage and k-NN graph clustering; identified severe size-imbalance issues with Ward and collapse with average linkage.
+- **`skater_clustering.ipynb`** — SKATER (Spatial 'K'luster Analysis by Tree Edge Removal) applied to LP3 parameters and AEP values; results stored in `site_regions_skater_*.csv`.
+- **`connectivity_graph_viz.ipynb`** — visualization of the spatial connectivity graph and cluster boundaries.
+
+Cluster assignments are exported as CSVs (`site_regions_*.csv`) with columns `site_no`, `region`.
+
+---
+
+## Analysis — Flood Impact Text (`code/ffa_analysis/`)
+
+Analysis of the free-text NWS impact descriptions in `flood_stages.parquet` (action / flood / moderate / major stages, ~8,100 non-null descriptions).
+
+### Step 1 — TF-IDF exploration (`flood_impact_tfidf.ipynb`)
+
+Identifies distinctive vocabulary at each severity level using within-level and cross-level TF-IDF. Used to inform the tag taxonomy for LLM extraction.
+
+### Step 2 — LLM tag extraction (`flood_impact_extraction.py`)
+
+Extracts structured binary impact tags from each description using `claude-haiku-4-5` via the Anthropic Batch API. Tags are extracted blind (no severity level passed to the model). Requires `ANTHROPIC_API_KEY`.
+
+```bash
+python code/ffa_analysis/flood_impact_extraction.py submit    # submit batch (~8,100 requests)
+python code/ffa_analysis/flood_impact_extraction.py status    # check processing status
+python code/ffa_analysis/flood_impact_extraction.py retrieve  # download results → parquet
+```
+
+Output: `data/metadata/flood_impact_tags.parquet` — long format (`site_no`, `level`, `description`, plus one boolean column per tag).
+
+**Current tag taxonomy** (add new entries to `TAXONOMY` dict in `flood_impact_extraction.py` and resubmit):
+
+| Tag | Description |
+|-----|-------------|
+| `road_flooded` | Roads or highways inundated |
+| `road_closed` | Roads or access routes closed/impassable |
+| `bridge_threatened` | Bridges threatened, overtopped, or closed |
+| `homes_threatened` | Homes threatened but not yet flooded |
+| `homes_flooded` | Homes or structures inundated |
+| `businesses_flooded` | Commercial properties flooded |
+| `agricultural` | Farmland or crops affected |
+| `natural_lowland` | Natural areas (floodplains, wetlands) flooded |
+| `recreational` | Parks, campsites, boat ramps affected |
+| `evacuation` | Evacuations or emergency access impaired |
+| `utilities` | Power, water supply, or utilities disrupted |
+| `widespread` | Impacts described as widespread or extensive |
+
+### Step 3 — Visualization (`flood_impact_viz.ipynb`)
+
+- Tag prevalence curves and heatmap across severity levels
+- First-appearance level per tag (at which severity level each tag typically turns on)
+- Geographic maps of tag presence at major stage
+- State-level summaries
 
 ---
 
