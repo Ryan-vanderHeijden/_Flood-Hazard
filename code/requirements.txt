@@ -14,3 +14,7 @@ pandas
 pyarrow
 plotly
 scipy
+
+# Spatial clustering
+spopt
+libpysal
