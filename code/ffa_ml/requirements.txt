@@ -1,0 +1,9 @@
+# ML pipeline for return-period flood-flow prediction (code/ffa_ml).
+# Installed into the `hydro` conda env alongside the existing FFA stack.
+# Core numerics/IO (numpy, pandas, pyarrow, geopandas, scikit-learn, shap,
+# matplotlib, requests) already come from the base project env; pinned here
+# are the additions this package needs.
+lightgbm>=4.7          # gradient-boosted trees, native quantile objective, CPU
+quantile-forest>=1.4   # quantile regression forests (UQ cross-check)
+mapie>=1.5             # conformal prediction intervals
+contextily>=1.7        # basemap tiles for spatial-CV / prediction maps

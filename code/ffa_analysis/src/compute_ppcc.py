@@ -8,6 +8,10 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from scipy.stats import pearsonr, pearson3
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from compute_flood_frequency import _parse_peak_cd  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 
@@ -91,10 +95,14 @@ def compute_ppcc(
     eligible = ffa[(ffa["record_ok"] == True) & (~ffa["degenerate_fit"])]
 
     # Pre-group peaks by site to avoid repeated DataFrame filtering in workers
-    usable = peaks[
-        (~peaks["peak_cd"].str.contains("1|6|7|8", na=False))
-        & (peaks["peak_va"] > 0)
-    ].copy()
+    # The probability plot needs the systematic, fully observed peaks — the
+    # same sample _classify_peaks calls sys_peaks. Excluded: 1 (max daily
+    # average, dropped upstream), 7 (historical), and 4/8 (left- and
+    # right-censored, which have no plotting position). Codes 5 and 6 mark
+    # regulation but the peak itself is observed, so they stay in.
+    _codes = peaks["peak_cd"].apply(_parse_peak_cd)
+    _excluded = _codes.apply(lambda c: bool(c & {1, 4, 7, 8}))
+    usable = peaks[~_excluded & (peaks["peak_va"] > 0)].copy()
     usable["log_peak_va"] = np.log10(usable["peak_va"])
     peaks_by_site: dict[str, np.ndarray] = {
         site: grp["log_peak_va"].dropna().values

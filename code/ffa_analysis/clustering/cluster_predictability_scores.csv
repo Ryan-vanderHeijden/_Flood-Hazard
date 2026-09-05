@@ -1,0 +1,4 @@
+method,cv_balanced_accuracy_mean,cv_balanced_accuracy_std,cv_accuracy_mean,naive_baseline
+SKATER,0.4202,0.0231,0.6259,0.125
+Ward,0.1863,0.0122,0.4023,0.125
+K-Means,0.2022,0.0105,0.3643,0.125

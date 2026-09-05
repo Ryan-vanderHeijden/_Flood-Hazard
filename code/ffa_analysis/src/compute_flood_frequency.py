@@ -598,9 +598,20 @@ def _apply_weighted_skew(
 
     # --- Join state and regional skew ---
     if "site_no" in site_info.columns and "state_cd" in site_info.columns:
-        result = result.merge(
-            site_info[["site_no", "state_cd"]], on="site_no", how="left"
-        )
+        # site_info.parquet carries a handful of sites twice — the same physical
+        # gage registered under two station names (an agency-prefixed variant
+        # such as "USCOE ..." plus a plain one), with slightly different
+        # coordinates. A plain left merge fans those out into duplicate result
+        # rows, which then propagate to every downstream join. state_cd agrees
+        # across each pair, so deduplicating on site_no is lossless here.
+        sites = site_info[["site_no", "state_cd"]].drop_duplicates("site_no")
+        n_dup = len(site_info) - len(sites)
+        if n_dup:
+            logger.warning(
+                "site_info has %d duplicate site_no rows; keeping the first of each",
+                n_dup,
+            )
+        result = result.merge(sites, on="site_no", how="left")
     else:
         result["state_cd"] = np.nan
 
