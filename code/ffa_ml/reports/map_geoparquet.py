@@ -23,6 +23,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
 import numpy as np
 import geopandas as gpd
 
@@ -43,21 +44,19 @@ def build(rp: int = 10) -> Path:
             c = g.geometry.centroid
         xs.append(c.x.to_numpy())
         ys.append(c.y.to_numpy())
-        vs.append(np.log10(g[qcol].to_numpy()))
+        vs.append(g[qcol].to_numpy())
         logger.info("  %s: %d catchments", part.stem, len(g))
     x = np.concatenate(xs); y = np.concatenate(ys); v = np.concatenate(vs)
     logger.info("Total plotted: %d catchments", len(v))
+    logger.info("Q%d range: %.1f – %.1f cfs", rp, v.min(), v.max())
 
-    vmin, vmax = np.percentile(v, [2, 98])
     fig, ax = plt.subplots(figsize=(11, 6.6))
-    # sc = ax.scatter(x, y, c=v, cmap="viridis", s=0.6, vmin=vmin, vmax=vmax, linewidths=0)
-    sc = ax.scatter(x, y, c=v, cmap=cc.kbc, s=0.6, vmin=vmin, vmax=vmax, linewidths=0)
+    sc = ax.scatter(x, y, c=v, cmap=cc.cm.kbc_r, s=0.6,
+                    norm=LogNorm(vmin=v.min(), vmax=v.max()), linewidths=0)
     ax.set_xlim(-125, -66); ax.set_ylim(24, 50)
     ax.set_aspect(1.25); ax.set_axis_off()
     ax.set_title(f"Predicted {rp}-year flood (Q{rp}) — {len(v):,} NHDPlus catchments", fontsize=12)
     cbar = fig.colorbar(sc, ax=ax, shrink=0.7, pad=0.01)
-    ticks = np.linspace(vmin, vmax, 6)
-    cbar.set_ticks(ticks); cbar.set_ticklabels([f"{10**t:,.0f}" for t in ticks])
     cbar.set_label(f"Q{rp} (cfs)")
     fig.tight_layout()
     out = REPORT_DIR / f"fig_conus_q{rp}_catchments.png"

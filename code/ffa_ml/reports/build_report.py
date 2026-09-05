@@ -38,9 +38,25 @@ def _md_table(csv: Path, floatfmt: str = "{:.3f}") -> str:
     return "\n".join([header, sep, *rows])
 
 
+def _nwm_table(csv: Path) -> str:
+    """Pivot the NWM/ML comparison metrics into one markdown table (per return period)."""
+    df = pd.read_csv(csv)
+    piv = df.pivot(index="return_period", columns="source")
+    rows = ["| RP | NWM R² | NWM bias (dex) | NWM med. ratio | ML R² | ML bias (dex) |",
+            "| --- | --- | --- | --- | --- | --- |"]
+    for rp in piv.index:
+        rows.append(
+            f"| Q{rp} | {piv[('r2', 'nwm')][rp]:.2f} | {piv[('bias_dex', 'nwm')][rp]:+.2f} | "
+            f"{piv[('median_ratio', 'nwm')][rp]:.2f} | {piv[('r2', 'ml')][rp]:.2f} | "
+            f"{piv[('bias_dex', 'ml')][rp]:+.2f} |"
+        )
+    return "\n".join(rows)
+
+
 def build() -> Path:
     metrics = _md_table(REPORT_DIR / "metrics_by_rp.csv")
     baseline = _md_table(REPORT_DIR / "baseline_comparison.csv")
+    nwm = _nwm_table(REPORT_DIR / "nwm_comparison_metrics.csv")
     n_conus = pd.read_parquet(ML_DIR / "conus_predictions.parquet", columns=["COMID"]).shape[0]
 
     nb = nbf.v4.new_notebook()
@@ -72,6 +88,24 @@ def build() -> Path:
             "state-specific USGS equations still lead (e.g. Q10 log-R² ≈ 0.88 vs ≈ 0.80). "
             "The value here is a single, nationally consistent model with calibrated uncertainty "
             "and full CONUS coverage — including reaches StreamStats regression does not serve."
+        ),
+        nbf.v4.new_markdown_cell(
+            "## Independent benchmark: NWM v3.0 retrospective\n\n" + nwm + "\n\n"
+            "A second, fully independent check. From 45 years (1979–2023) of NWM v3.0 "
+            "retrospective *daily* streamflow we take the water-year annual maxima and fit "
+            "the same log-Pearson III, giving NWM-implied Q2–Q500 at each gauge reach "
+            "(COMID join). Both estimators are scored out-of-sample against the at-site LP3 "
+            "on the **1,440 unregulated QC reaches**: NWM is a physics model that never saw "
+            "these peaks, and the ML column is its **leave-HUC2-out** prediction (not the "
+            "in-sample fit).\n\n"
+            "The attribute-based ML model is the stronger ungauged estimator at every return "
+            "period (e.g. Q10 R² ≈ 0.79 vs 0.32; Q100 ≈ 0.71 vs 0.34). NWM also runs "
+            "**~40% low** (median ratio ≈ 0.57–0.60, bias ≈ −0.27 dex) — the expected "
+            "consequence of annual maxima taken from *daily-mean* flow, which under-represents "
+            "instantaneous peaks, compounded by the model's own error. NWM's skill peaks around "
+            "Q25–Q50 and its spatial pattern corroborates the ML surface, but for flood-quantile "
+            "*magnitude* at ungauged reaches the trained model is clearly preferable.\n\n"
+            "![nwm](fig_nwm_comparison.png)"
         ),
         nbf.v4.new_markdown_cell(
             "## Spatial cross-validation residuals\n\n"
