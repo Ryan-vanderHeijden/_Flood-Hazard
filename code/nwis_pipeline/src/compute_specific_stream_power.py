@@ -45,6 +45,20 @@ def specific_stream_power(gamma: float = 9800, Q: float = None, S: float = None,
     return (gamma * Q * S) / w
 
 
+def total_stream_power(gamma: float = 9800, Q: float = None, S: float = None) -> float:
+    """
+    Compute total stream power (W/m — power per unit channel length).
+
+        gamma   unit weight of water (N/m³), default 9800
+        Q       discharge (m³/s)
+        S       energy slope / channel slope (m/m, dimensionless)
+
+    Returns Omega = gamma * Q * S  in W/m.  This is the width-independent
+    counterpart to specific_stream_power (omega = Omega / w).
+    """
+    return gamma * Q * S
+
+
 # ---------------------------------------------------------------------------
 # Main function
 # ---------------------------------------------------------------------------
@@ -68,7 +82,8 @@ def compute_specific_stream_power(
     -------
     DataFrame with columns:
         site_no,
-        action_ssp_wm2, flood_ssp_wm2, moderate_ssp_wm2, major_ssp_wm2
+        action_ssp_wm2, flood_ssp_wm2, moderate_ssp_wm2, major_ssp_wm2   (specific, W/m²)
+        action_tsp_wm,  flood_tsp_wm,  moderate_tsp_wm,  major_tsp_wm     (total, W/m)
     """
     # Merge on site_no
     df = channel_geometry[["site_no", "bankfull_width_ft", "nhd_slope_ft_ft"]].merge(
@@ -84,7 +99,7 @@ def compute_specific_stream_power(
     for col in ["action_flow_cfs", "flood_flow_cfs", "moderate_flow_cfs", "major_flow_cfs"]:
         df[col.replace("_cfs", "_cms")] = df[col] * CFS_TO_CMS
 
-    # Compute SSP for each threshold
+    # Compute specific (ω, W/m²) and total (Ω, W/m) stream power for each threshold
     for threshold in ("action", "flood", "moderate", "major"):
         df[f"{threshold}_ssp_wm2"] = df.apply(
             lambda row, t=threshold: specific_stream_power(
@@ -99,15 +114,29 @@ def compute_specific_stream_power(
             else float("nan"),
             axis=1,
         )
+        # Total stream power drops the 1/w term (needs only Q and S).
+        df[f"{threshold}_tsp_wm"] = df.apply(
+            lambda row, t=threshold: total_stream_power(
+                Q=row[f"{t}_flow_cms"],
+                S=row["nhd_slope_ft_ft"],
+            )
+            if pd.notna(row[f"{t}_flow_cms"])
+            and pd.notna(row["nhd_slope_ft_ft"])
+            else float("nan"),
+            axis=1,
+        )
 
     n_total = len(df)
     for threshold in ("action", "flood", "moderate", "major"):
-        n_valid = df[f"{threshold}_ssp_wm2"].notna().sum()
-        logger.info("  %s: %d / %d sites with valid SSP", threshold, n_valid, n_total)
+        n_ssp = df[f"{threshold}_ssp_wm2"].notna().sum()
+        n_tsp = df[f"{threshold}_tsp_wm"].notna().sum()
+        logger.info("  %s: %d valid SSP, %d valid TSP / %d sites", threshold, n_ssp, n_tsp, n_total)
 
     out_cols = ["site_no",
                 "action_ssp_wm2", "flood_ssp_wm2",
-                "moderate_ssp_wm2", "major_ssp_wm2"]
+                "moderate_ssp_wm2", "major_ssp_wm2",
+                "action_tsp_wm", "flood_tsp_wm",
+                "moderate_tsp_wm", "major_tsp_wm"]
     return df[out_cols].reset_index(drop=True)
 
 
