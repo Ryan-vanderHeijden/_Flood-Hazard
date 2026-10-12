@@ -7,10 +7,17 @@ For each site that has at least one flood stage threshold defined but a missing
 corresponding flow (in cfs), this service:
 
   1. Fetches the current USGS NWIS rating curve (file_type="exsa").
-  2. Interpolates each NaN flow threshold from the stage-discharge table.
-  3. Writes only NaN flow values; NWPS-provided flows are preserved.
+  2. Re-derives every flow threshold at that site from the stage-discharge
+     table, so all thresholds share one version of the rating.
+  3. Leaves the flow NaN when the stage lies outside the rating table. A
+     rating says nothing about flow beyond its last point, so no value is
+     extrapolated or clamped; an existing NWPS flow is kept in that case.
   4. Adds *_flow_source columns: "nwps" for NWPS-provided, "rating_curve" for
-     newly filled, None for still-missing.
+     interpolated, "above_rating" / "below_rating" for a stage outside the
+     rating table (flow NaN), None for still-missing.
+  5. Records the top of each rating table (rating_max_stage_ft,
+     rating_max_flow_cfs). For an "above_rating" threshold the flow at the top
+     of the rating is a lower bound on the threshold flow.
 
 Datum note: USGS rating curves use gage height above the local gage datum (GD).
 NWS stage thresholds are also reported as gage height above the local gage datum,
@@ -43,6 +50,13 @@ _THRESHOLD_PAIRS = [
 
 _FLOW_COLS   = [p[1] for p in _THRESHOLD_PAIRS]
 _SOURCE_COLS = [c.replace("_cfs", "_source") for c in _FLOW_COLS]
+
+# Source labels for a stage outside the rating table; the flow is left NaN.
+_ABOVE_RATING = "above_rating"
+_BELOW_RATING = "below_rating"
+
+# Stage and flow at the top of the site's rating table
+_RATING_TOP_COLS = ["rating_max_stage_ft", "rating_max_flow_cfs"]
 
 
 def _fetch_rating(site_no: str) -> pd.DataFrame | None:
@@ -88,41 +102,63 @@ def _fetch_rating(site_no: str) -> pd.DataFrame | None:
 def _interpolate_flows(
     rating: pd.DataFrame,
     stages: dict[str, float],
-) -> dict[str, float]:
+) -> dict[str, tuple[float, str]]:
     """
     Interpolate flow values at each stage threshold from the rating curve.
 
-    Uses numpy.interp which clamps to the boundary values when a threshold
-    falls outside the rating table range; boundary extrapolation is flagged
-    in the source column by the caller.
+    numpy.interp clamps to the boundary value outside the table range, which
+    would assign the rating's maximum flow to every stage above its top. Those
+    stages are returned as NaN with an "above_rating" / "below_rating" source
+    instead.
 
     Args:
         rating: DataFrame with [stage_ft, discharge_cfs] sorted by stage.
         stages: Mapping of flow-column-name → stage value (ft).
 
     Returns:
-        Dict of flow-column-name → interpolated discharge (cfs).
+        Dict of flow-column-name → (discharge in cfs, source label).
     """
     x = rating["stage_ft"].values
     y = rating["discharge_cfs"].values
-    result: dict[str, float] = {}
+    result: dict[str, tuple[float, str]] = {}
 
     for flow_col, stage_val in stages.items():
         if np.isnan(stage_val):
             continue
+        if stage_val > x[-1]:
+            result[flow_col] = (float("nan"), _ABOVE_RATING)
+            continue
+        if stage_val < x[0]:
+            result[flow_col] = (float("nan"), _BELOW_RATING)
+            continue
         flow = float(np.interp(stage_val, x, y))
-        # Treat as invalid if we had to extrapolate below zero-flow
+        # Treat as invalid if the rating gives a negative flow
         if flow < 0:
             flow = float("nan")
-        result[flow_col] = flow
+        result[flow_col] = (flow, "rating_curve")
 
     return result
+
+
+def _needs_rating(row: pd.Series) -> bool:
+    """True if any threshold with a stage has no NWPS-provided flow.
+
+    Covers flows still missing as well as flows a previous run derived from a
+    rating, so re-running the service refreshes them against the current rating.
+    """
+    for stage_col, flow_col in _THRESHOLD_PAIRS:
+        if pd.isna(row.get(stage_col)):
+            continue
+        src = row.get(flow_col.replace("_cfs", "_source"))
+        if pd.isna(row.get(flow_col)) or src != "nwps":
+            return True
+    return False
 
 
 def _process_site(
     site_no: str,
     row: pd.Series,
-) -> tuple[str, dict[str, float]] | None:
+) -> tuple[str, dict[str, tuple[float, str]], tuple[float, float]] | None:
     """
     Worker: fetch rating curve and compute flow thresholds.
 
@@ -131,14 +167,10 @@ def _process_site(
     source (avoids ordering violations when NWPS and rating-curve flows
     originate from different versions of the stage-discharge relationship).
 
-    Returns (site_no, {flow_col: value, ...}) or None on failure.
+    Returns (site_no, {flow_col: (value, source), ...}, (top stage, top flow))
+    or None on failure.
     """
-    # Only proceed if at least one flow is missing (has valid stage but NaN flow)
-    needs_any = any(
-        pd.isna(row.get(flow_col)) and not pd.isna(row.get(stage_col))
-        for stage_col, flow_col in _THRESHOLD_PAIRS
-    )
-    if not needs_any:
+    if not _needs_rating(row):
         return None
 
     # Re-derive ALL flows with valid stages from the rating curve
@@ -160,7 +192,8 @@ def _process_site(
         "  %s: derived %d flow threshold(s) from rating curve",
         site_no, len(filled),
     )
-    return site_no, filled
+    top = rating.iloc[-1]
+    return site_no, filled, (float(top["stage_ft"]), float(top["discharge_cfs"]))
 
 
 def fill_flows_from_ratings(
@@ -176,7 +209,8 @@ def fill_flows_from_ratings(
         out_path:     Directory where the updated flood_stages.parquet is saved.
 
     Returns:
-        Updated DataFrame with filled *_flow_cfs and added *_flow_source columns.
+        Updated DataFrame with filled *_flow_cfs and added *_flow_source and
+        rating_max_* columns.
     """
     df = flood_stages.copy()
 
@@ -188,11 +222,12 @@ def fill_flows_from_ratings(
         has_flow = df[flow_col].notna()
         df.loc[has_flow & df[src_col].isna(), src_col] = "nwps"
 
+    for col in _RATING_TOP_COLS:
+        if col not in df.columns:
+            df[col] = np.nan
+
     # Identify sites that need rating-curve lookup
-    needs_rating = df[
-        df[[p[1] for p in _THRESHOLD_PAIRS]].isna().any(axis=1) &  # any NaN flow
-        df[[p[0] for p in _THRESHOLD_PAIRS]].notna().any(axis=1)   # at least one stage
-    ]["site_no"].tolist()
+    needs_rating = df.loc[df.apply(_needs_rating, axis=1), "site_no"].tolist()
 
     if not needs_rating:
         logger.info("  No sites need rating-curve fallback.")
@@ -200,7 +235,7 @@ def fill_flows_from_ratings(
         return df
 
     logger.info(
-        "  Fetching rating curves for %d sites with NaN flow thresholds...",
+        "  Fetching rating curves for %d sites without NWPS flow thresholds...",
         len(needs_rating),
     )
 
@@ -209,6 +244,7 @@ def fill_flows_from_ratings(
 
     filled_count = 0
     failed_count = 0
+    outside_count = {_ABOVE_RATING: 0, _BELOW_RATING: 0}
 
     with ThreadPoolExecutor(max_workers=_RC_MAX_WORKERS) as ex:
         futures = {
@@ -221,17 +257,29 @@ def fill_flows_from_ratings(
             if result is None:
                 failed_count += 1
                 continue
-            site_no, filled = result
+            site_no, filled, rating_top = result
             idx = df.index[df["site_no"] == site_no]
-            for flow_col, flow_val in filled.items():
-                df.loc[idx, flow_col] = flow_val
+            df.loc[idx, _RATING_TOP_COLS] = rating_top
+            for flow_col, (flow_val, source) in filled.items():
                 src_col = flow_col.replace("_cfs", "_source")
-                df.loc[idx, src_col] = "rating_curve"
+                # Outside the rating table there is nothing to replace an
+                # NWPS-provided flow with, so keep it.
+                if source != "rating_curve":
+                    outside_count[source] += 1
+                    if (df.loc[idx, src_col] == "nwps").all():
+                        continue
+                df.loc[idx, flow_col] = flow_val
+                df.loc[idx, src_col] = source
             filled_count += 1
 
     logger.info(
         "  Rating curves: filled flows for %d sites; no rating found for %d",
         filled_count, failed_count,
+    )
+    logger.info(
+        "  Thresholds outside the rating table (flow left NaN unless NWPS "
+        "provided one): %d above, %d below",
+        outside_count[_ABOVE_RATING], outside_count[_BELOW_RATING],
     )
 
     # Summary of remaining gaps

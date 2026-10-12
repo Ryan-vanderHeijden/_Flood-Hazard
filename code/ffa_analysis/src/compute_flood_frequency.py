@@ -74,6 +74,7 @@ _THRESHOLD_FLOWS = [
     "major_flow_cfs",
 ]
 _LEVELS = ["action", "flood", "moderate", "major"]
+_RATING_MAX_FLOW = "rating_max_flow_cfs"
 
 _REGIONAL_SKEW_FILE = Path(__file__).parent.parent / "data" / "regional_skew_lookup.csv"
 
@@ -586,6 +587,8 @@ def _apply_weighted_skew(
     threshold AEP / return-period columns to use G_w instead of station skew.
 
     New columns added to result:
+        <level>_return_period_lb_yr — lower bound on the return period where
+                             the threshold stage is above the rating table
         regional_skew_g    — G_r from state lookup (NaN if state not matched)
         mse_regional_g     — MSE of G_r (NaN if state not matched)
         mse_station_skew   — MSE of station skew from Wallis et al. formula
@@ -650,6 +653,7 @@ def _apply_weighted_skew(
     # --- Recompute threshold AEPs using weighted skew ---
     # Bring in the original threshold flow values so we can re-evaluate AEPs.
     flows = flood_stages[["site_no"] + _THRESHOLD_FLOWS].set_index("site_no")
+    flood_stages_idx = flood_stages.set_index("site_no")
     result = result.set_index("site_no")
     for lvl, flow_col in zip(_LEVELS, _THRESHOLD_FLOWS):
         aep_col = f"{lvl}_aep"
@@ -668,6 +672,27 @@ def _apply_weighted_skew(
             new_rps.append(rp)
         result[aep_col] = new_aeps
         result[rp_col]  = new_rps
+
+    # --- Return-period lower bound for thresholds above the rating table ---
+    # The threshold flow is unknown there but exceeds the flow at the top of
+    # the rating, so the return period of that flow bounds it from below.
+    for lvl, flow_col in zip(_LEVELS, _THRESHOLD_FLOWS):
+        src_col = flow_col.replace("_cfs", "_source")
+        lbs = []
+        for site_no, row in result.iterrows():
+            lb = np.nan
+            if (src_col in flood_stages.columns and _RATING_MAX_FLOW in flood_stages.columns
+                    and site_no in flows.index
+                    and flood_stages_idx.at[site_no, src_col] == "above_rating"):
+                g_w   = row.get("lp3_weighted_skew", np.nan)
+                loc   = row.get("lp3_loc", np.nan)
+                scale = row.get("lp3_scale", np.nan)
+                if np.isfinite(g_w) and np.isfinite(loc) and np.isfinite(scale):
+                    _, lb = _threshold_stats(
+                        flood_stages_idx.at[site_no, _RATING_MAX_FLOW], g_w, loc, scale
+                    )
+            lbs.append(lb)
+        result[f"{lvl}_return_period_lb_yr"] = lbs
     result = result.reset_index()
 
     return result
@@ -811,14 +836,25 @@ def compute_flood_frequency(
     high_censoring           : bool  — >25 % of effective record is censored (code 4/8 + PILF)
     record_ok                : bool  — n_peaks >= min_peaks
     degenerate_fit           : bool  — EMA diverged (loc<0.5 | scale>2 | |skew|>3)
+    <level>_return_period_lb_yr : float — lower bound on the return period,
+                                       set only where the threshold stage is
+                                       above the rating table (flow unknown)
     """
     fs_file = flood_stages_path / "flood_stages.parquet"
     if not fs_file.exists():
         raise FileNotFoundError(fs_file)
 
-    fs = pd.read_parquet(fs_file, columns=["site_no"] + _THRESHOLD_FLOWS)
+    fs = pd.read_parquet(fs_file)
     has_any = fs[_THRESHOLD_FLOWS].notna().any(axis=1)
-    fs = fs[has_any].copy()
+    # A threshold whose stage lies outside the rating table has no flow, but
+    # the site's LP3 fit does not depend on that, so keep it in the fit set.
+    source_cols = [c.replace("_cfs", "_source") for c in _THRESHOLD_FLOWS]
+    if all(c in fs.columns for c in source_cols):
+        has_any |= fs[source_cols].isin(["above_rating", "below_rating"]).any(axis=1)
+    keep = ["site_no"] + _THRESHOLD_FLOWS + [
+        c for c in source_cols + [_RATING_MAX_FLOW] if c in fs.columns
+    ]
+    fs = fs.loc[has_any, keep].copy()
     site_ids = fs["site_no"].tolist()
 
     out_path.mkdir(parents=True, exist_ok=True)
