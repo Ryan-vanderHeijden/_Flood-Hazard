@@ -69,7 +69,7 @@ def _summarize_coverage(
     gage_ids: list[str],
     streamflow_df: pd.DataFrame,
     flood_stages: pd.DataFrame,
-    gauge_map: pd.DataFrame,
+    gage_map: pd.DataFrame,
     out_path: Path,
 ) -> None:
     """Log and save a per-site data coverage summary."""
@@ -100,10 +100,10 @@ def _summarize_coverage(
     for col in ("has_flood_stage", "has_action_stage", "has_moderate_stage", "has_major_stage", "has_flood_flow"):
         coverage[col] = coverage[col].fillna(False)
 
-    # Reach ID availability from gauge_map (includes NLDI-resolved sites)
-    if not gauge_map.empty:
+    # Reach ID availability from gage_map (includes NLDI-resolved sites)
+    if not gage_map.empty:
         reach_coverage = (
-            gauge_map[gauge_map["reach_id"].notna()][["site_no"]]
+            gage_map[gage_map["reach_id"].notna()][["site_no"]]
             .drop_duplicates()
             .assign(has_reach_id=True)
         )
@@ -123,7 +123,7 @@ def _validate_outputs(
     site_info: pd.DataFrame,
     streamflow_df: pd.DataFrame,
     flood_stages: pd.DataFrame,
-    gauge_map: pd.DataFrame,
+    gage_map: pd.DataFrame,
 ) -> None:
     """Log output consistency checks and a pipeline-funnel summary."""
     n_total = len(gage_ids)
@@ -149,7 +149,7 @@ def _validate_outputs(
         n_stage = 0
 
     n_flood_threshold = int(flood_stages["flood_stage_ft"].notna().sum()) if not flood_stages.empty else 0
-    n_reach = int(gauge_map["reach_id"].notna().sum()) if not gauge_map.empty else 0
+    n_reach = int(gage_map["reach_id"].notna().sum()) if not gage_map.empty else 0
 
     logger.info(
         "Pipeline funnel: %d total → %d metadata → %d discharge → "
@@ -168,11 +168,11 @@ def _validate_outputs(
                 len(orphan), sorted(orphan),
             )
 
-    # Flag any gauge_map rows where reach_id is still null after NLDI fallback
-    if not gauge_map.empty:
-        null_reach = gauge_map["reach_id"].isna().sum()
+    # Flag any gage_map rows where reach_id is still null after NLDI fallback
+    if not gage_map.empty:
+        null_reach = gage_map["reach_id"].isna().sum()
         if null_reach:
-            logger.warning("%d sites in gauge_map have null reach_id", null_reach)
+            logger.warning("%d sites in gage_map have null reach_id", null_reach)
 
 
 def main():
@@ -221,11 +221,11 @@ def main():
         cache_path=DATA_DIR / "metadata" / "hads_crosswalk.parquet",
     )
 
-    # Read gauge_map back from disk (written by fetch_flood_stages).
-    gauge_map_path = DATA_DIR / "metadata" / "gauge_map.parquet"
-    gauge_map = (
-        pd.read_parquet(gauge_map_path)
-        if gauge_map_path.exists()
+    # Read gage_map back from disk (written by fetch_flood_stages).
+    gage_map_path = DATA_DIR / "metadata" / "gage_map.parquet"
+    gage_map = (
+        pd.read_parquet(gage_map_path)
+        if gage_map_path.exists()
         else pd.DataFrame(columns=["site_no", "lid", "reach_id"])
     )
 
@@ -258,12 +258,12 @@ def main():
     logger.info("=" * 60)
     logger.info("VALIDATION")
     logger.info("=" * 60)
-    _validate_outputs(gage_ids, site_info, streamflow_df, flood_stages, gauge_map)
+    _validate_outputs(gage_ids, site_info, streamflow_df, flood_stages, gage_map)
 
     logger.info("=" * 60)
     logger.info("DATA COVERAGE SUMMARY")
     logger.info("=" * 60)
-    _summarize_coverage(gage_ids, streamflow_df, flood_stages, gauge_map, DATA_DIR / "metadata")
+    _summarize_coverage(gage_ids, streamflow_df, flood_stages, gage_map, DATA_DIR / "metadata")
 
     logger.info("Pipeline complete.")
 

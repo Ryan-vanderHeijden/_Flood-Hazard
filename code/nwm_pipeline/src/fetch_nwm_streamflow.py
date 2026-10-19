@@ -2,7 +2,7 @@
 fetch_nwm_streamflow.py
 -----------------------
 Fetch NWM Retrospective v3.0 daily-mean streamflow from the public AWS S3 Zarr
-store for every gauge that has a NWM reach_id in gauge_map.parquet.
+store for every gauge that has a NWM reach_id in gage_map.parquet.
 
 Data source
 -----------
@@ -63,13 +63,13 @@ _CFS_PER_CMS  = 35.3147
 # Public API
 # ---------------------------------------------------------------------------
 
-def fetch_nwm_streamflow(gauge_map_path: Path, out_path: Path) -> None:
+def fetch_nwm_streamflow(gage_map_path: Path, out_path: Path) -> None:
     """Fetch NWM v3.0 daily streamflow and write to ``out_path/nwm_streamflow.parquet``.
 
     Parameters
     ----------
-    gauge_map_path:
-        Path to ``gauge_map.parquet`` produced by the NWIS pipeline.
+    gage_map_path:
+        Path to ``gage_map.parquet`` produced by the NWIS pipeline.
         Required columns: ``site_no`` (str), ``reach_id`` (str or numeric).
     out_path:
         Output directory.  Created if absent.  Per-year checkpoints are written
@@ -80,10 +80,10 @@ def fetch_nwm_streamflow(gauge_map_path: Path, out_path: Path) -> None:
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
-    # Step 1: Load gauge_map, extract valid reach_ids
+    # Step 1: Load gage_map, extract valid reach_ids
     # ------------------------------------------------------------------
-    logger.info("Loading gauge map from %s", gauge_map_path)
-    gmap = pd.read_parquet(gauge_map_path, columns=["site_no", "reach_id"])
+    logger.info("Loading gage map from %s", gage_map_path)
+    gmap = pd.read_parquet(gage_map_path, columns=["site_no", "reach_id"])
 
     gmap = gmap.dropna(subset=["reach_id"])
     gmap = gmap[gmap["reach_id"].astype(str).str.strip() != ""]
@@ -93,7 +93,7 @@ def fetch_nwm_streamflow(gauge_map_path: Path, out_path: Path) -> None:
         gmap["reach_id"] = gmap["reach_id"].astype(np.int64)
     except (ValueError, TypeError) as exc:
         raise ValueError(
-            f"Could not cast reach_id column to int64 in {gauge_map_path}. "
+            f"Could not cast reach_id column to int64 in {gage_map_path}. "
             "Inspect the file for non-numeric values."
         ) from exc
 

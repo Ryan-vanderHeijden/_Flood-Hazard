@@ -1,7 +1,7 @@
 """
 run_pipeline.py  —  NWM Retrospective v3.0 streamflow pipeline
 ---------------------------------------------------------------
-Entry point.  Reads gauge_map.parquet from the NWIS pipeline and fetches
+Entry point.  Reads gage_map.parquet from the NWIS pipeline and fetches
 NWM v3.0 daily streamflow for every site with a valid NWM reach_id.
 
 Usage
@@ -29,8 +29,8 @@ from src.fetch_nwm_streamflow import fetch_nwm_streamflow
 
 _PIPELINE_DIR = Path(__file__).parent
 
-# Input: gauge_map.parquet from NWIS pipeline
-GAUGE_MAP_PATH = Path("/home/ryan/data/flood_hazard/metadata/gauge_map.parquet")
+# Input: gage_map.parquet from NWIS pipeline
+GAGE_MAP_PATH = Path("/home/ryan/data/flood_hazard/metadata/gage_map.parquet")
 
 # Output directory for NWM data
 NWM_OUT_PATH = Path("/home/ryan/data/flood_hazard/nwm")
@@ -66,18 +66,18 @@ def main() -> None:
     logger.info("=" * 60)
     logger.info("NWM Retrospective v3.0 — Streamflow Pipeline")
     logger.info("=" * 60)
-    logger.info("Gauge map  : %s", GAUGE_MAP_PATH)
+    logger.info("Gage map   : %s", GAGE_MAP_PATH)
     logger.info("Output dir : %s", NWM_OUT_PATH)
 
-    if not GAUGE_MAP_PATH.exists():
+    if not GAGE_MAP_PATH.exists():
         logger.error(
-            "gauge_map.parquet not found at %s.\n"
+            "gage_map.parquet not found at %s.\n"
             "Run the NWIS pipeline first (code/nwis_pipeline/run_pipeline.py).",
-            GAUGE_MAP_PATH,
+            GAGE_MAP_PATH,
         )
         sys.exit(1)
 
-    fetch_nwm_streamflow(GAUGE_MAP_PATH, NWM_OUT_PATH)
+    fetch_nwm_streamflow(GAGE_MAP_PATH, NWM_OUT_PATH)
 
     logger.info("Pipeline complete.")
 

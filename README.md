@@ -100,7 +100,7 @@ python code/nwis_pipeline/run_pipeline.py
 |---|---------|--------|--------|
 | 1 | Site metadata | USGS NWIS | `data/metadata/site_info.parquet` |
 | 2 | Daily streamflow & stage | USGS NWIS | `data/streamflow/streamflow.parquet` |
-| 3 | Flood stage thresholds | NWS NWPS API | `data/metadata/flood_stages.parquet`, `data/metadata/gauge_map.parquet` |
+| 3 | Flood stage thresholds | NWS NWPS API | `data/metadata/flood_stages.parquet`, `data/metadata/gage_map.parquet` |
 | 4 | Flood flows from rating curves | USGS NWIS ratings | `data/metadata/flood_stages.parquet` (updated in place) |
 | 5 | Bankfull width | USGS StreamStats NSS API | `data/metadata/channel_geometry.parquet` |
 | 6 | Flood flow threshold percentiles | observed discharge record | `data/metadata/flood_threshold_percentiles.parquet` |
@@ -121,7 +121,7 @@ Flood stage thresholds (Service 3) are fetched from the [NWS National Water Pred
 Three files are written:
 
 - **`flood_stages.parquet`** — stage (ft) and flow (cfs) thresholds for action/minor/moderate/major categories, plus NWS impact statements.
-- **`gauge_map.parquet`** — maps each USGS `site_no` to its NWS LID and NWM `reach_id`.
+- **`gage_map.parquet`** — maps each USGS `site_no` to its NWS LID and NWM `reach_id`.
 - **`hads_crosswalk.parquet`** — cached HADS crosswalk (auto-managed; delete to force re-download).
 
 **Service 4** fills `*_flow_cfs` values that are NaN after Service 3 by fetching the active USGS NWIS rating curve (`file_type="exsa"`) for each affected site (30 parallel workers). Adds `*_flow_source` columns (`"nwps"` | `"rating_curve"`) to `flood_stages.parquet`.
@@ -156,7 +156,7 @@ Open `code/nwis_pipeline/inspect_outputs.ipynb` in Jupyter to explore the pipeli
 
 ## Pipeline 2 — NWM Retrospective (`code/nwm_pipeline/`)
 
-Fetches NWM Retrospective v3.0 daily-mean streamflow from the public AWS S3 Zarr store for every gauge that has a NWM reach_id in `gauge_map.parquet`. Run this after Pipeline 1.
+Fetches NWM Retrospective v3.0 daily-mean streamflow from the public AWS S3 Zarr store for every gauge that has a NWM reach_id in `gage_map.parquet`. Run this after Pipeline 1.
 
 **Data source:** `s3://noaa-nwm-retrospective-3-0-pds/CONUS/zarr/chrtout.zarr` (anonymous public access, us-east-1). Time span: ~Feb 1979 – Dec 2023 (hourly, resampled to daily mean).
 
