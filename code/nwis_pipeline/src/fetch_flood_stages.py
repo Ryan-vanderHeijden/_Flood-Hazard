@@ -25,10 +25,11 @@ Strategy:
   4. Verify the NWPS usgsId field matches the USGS site number
      (handles the ~37 sites that map to multiple LIDs).
   5. Extract flood category stage/flow values and impact statements.
-  6. NLDI fallback: for sites not matched via HADS/NWPS, query the USGS
-     NLDI API to obtain the NHDPlus COMID (= NWM reach ID) directly.
-     These sites receive NaN flood thresholds but do appear in gauge_map
-     with a reach_id so the NWM pipeline can still fetch their streamflow.
+  6. NLDI fallback: for sites not matched via HADS/NWPS, or matched but
+     with a blank NWPS reachId, query the USGS NLDI API to obtain the
+     NHDPlus COMID (= NWM reach ID) directly.  Unmatched sites receive NaN
+     flood thresholds but do appear in gage_map with a reach_id so the
+     NWM pipeline can still fetch their streamflow.
 
 Note: Only sites with observed stage data need flood stage thresholds;
   the pipeline passes only those sites (has_stage_data == True in
@@ -36,7 +37,7 @@ Note: Only sites with observed stage data need flood stage thresholds;
 
 Outputs:
   data/metadata/flood_stages.parquet    — stage/flow thresholds + impact statements
-  data/metadata/gauge_map.parquet       — USGS site_no ↔ NWS LID ↔ NWM reachId
+  data/metadata/gage_map.parquet        — USGS site_no ↔ NWS LID ↔ NWM reachId
   data/metadata/hads_crosswalk.parquet  — cached HADS crosswalk (refreshed every
                                           _HADS_CACHE_DAYS days)
 
@@ -55,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 NWPS_BASE = "https://api.water.noaa.gov/nwps/v1/gauges"
 HADS_URL  = "https://hads.ncep.noaa.gov/USGS/ALL_USGS-HADS_SITES.txt"
-NLDI_BASE = "https://labs.waterdata.usgs.gov/api/nldi/linked-data/nwissite"
+NLDI_BASE = "https://api.water.usgs.gov/nldi/linked-data/nwissite"
 
 # Concurrent workers for individual NWPS gauge record fetches.
 MAX_WORKERS = 50
@@ -119,8 +120,8 @@ def _fetch_nldi_comid(site_no: str) -> str | None:
         if features:
             comid = features[0]["properties"].get("comid")
             return str(comid).strip() if comid else None
-    except requests.RequestException:
-        pass
+    except requests.RequestException as exc:
+        logger.debug("  NLDI request failed for %s: %s", site_no, exc)
     return None
 
 
@@ -201,8 +202,8 @@ def fetch_flood_stages(
         moderate_impact, major_impact].  Rows are present for every entry
         in gage_ids; missing values are NaN / None.
 
-        Also writes gauge_map.parquet [site_no, lid, reach_id] to out_path.
-        Sites resolved via NLDI fallback appear in gauge_map with lid=None.
+        Also writes gage_map.parquet [site_no, lid, reach_id] to out_path.
+        Sites resolved via NLDI fallback appear in gage_map with lid=None.
     """
     stage_cols = [
         "action_stage_ft", "flood_stage_ft", "moderate_stage_ft", "major_stage_ft",
@@ -270,7 +271,7 @@ def fetch_flood_stages(
     # For sites with multiple LIDs, use the first that passes verification.
     # ------------------------------------------------------------------
     rows = []
-    gauge_map_rows = []
+    gage_map_rows = []
     seen_sites: set[str] = set()
 
     for _, row in targets.iterrows():
@@ -303,7 +304,7 @@ def fetch_flood_stages(
         reach_id = record.get("reachId", "")
         if isinstance(reach_id, str):
             reach_id = reach_id.strip() or None
-        gauge_map_rows.append({
+        gage_map_rows.append({
             "site_no":  site_no,
             "lid":      row["lid"],
             "reach_id": reach_id,
@@ -313,10 +314,12 @@ def fetch_flood_stages(
 
     # ------------------------------------------------------------------
     # Step 5: NLDI fallback — resolve reach_id for sites not matched
-    # via HADS/NWPS.  These sites receive NaN flood thresholds but will
-    # appear in gauge_map so the NWM pipeline can fetch their streamflow.
+    # via HADS/NWPS, and for matched sites whose NWPS reachId is blank.
+    # Unmatched sites receive NaN flood thresholds but will appear in
+    # gage_map so the NWM pipeline can fetch their streamflow.
     # ------------------------------------------------------------------
-    nldi_candidates = [s for s in gage_ids if s not in seen_sites]
+    blank_reach = {r["site_no"]: r for r in gage_map_rows if r["reach_id"] is None}
+    nldi_candidates = [s for s in gage_ids if s not in seen_sites] + list(blank_reach)
     if nldi_candidates:
         logger.info(
             "  NLDI fallback: querying %d sites without NWM reach_id...",
@@ -328,14 +331,24 @@ def fetch_flood_stages(
             for fut in as_completed(futures):
                 site_no = futures[fut]
                 comid = fut.result()
-                if comid:
+                if not comid:
+                    continue
+                if site_no in blank_reach:
+                    blank_reach[site_no]["reach_id"] = comid   # keep NWPS lid
+                else:
                     nldi_rows.append({"site_no": site_no, "lid": None, "reach_id": comid})
-        n_nldi = len(nldi_rows)
+        n_filled = sum(r["reach_id"] is not None for r in blank_reach.values())
+        n_nldi = len(nldi_rows) + n_filled
         logger.info(
-            "  NLDI fallback resolved %d/%d sites",
-            n_nldi, len(nldi_candidates),
+            "  NLDI fallback resolved %d/%d sites (%d blank NWPS reachIds filled)",
+            n_nldi, len(nldi_candidates), n_filled,
         )
-        gauge_map_rows.extend(nldi_rows)
+        if n_nldi == 0:
+            logger.warning(
+                "  NLDI fallback resolved no sites — check that %s is reachable",
+                NLDI_BASE,
+            )
+        gage_map_rows.extend(nldi_rows)
 
     # ------------------------------------------------------------------
     # Step 6: Build output — all gage_ids present, unmatched → NaN
@@ -359,13 +372,13 @@ def fetch_flood_stages(
     df.to_parquet(parquet_file, index=False)
     logger.info("Saved %d rows → %s", len(df), parquet_file)
 
-    gauge_map_df = (
-        pd.DataFrame(gauge_map_rows)
-        if gauge_map_rows
+    gage_map_df = (
+        pd.DataFrame(gage_map_rows)
+        if gage_map_rows
         else pd.DataFrame(columns=["site_no", "lid", "reach_id"])
     )
-    gauge_map_file = out_path / "gauge_map.parquet"
-    gauge_map_df.to_parquet(gauge_map_file, index=False)
-    logger.info("Saved %d rows → %s", len(gauge_map_df), gauge_map_file)
+    gage_map_file = out_path / "gage_map.parquet"
+    gage_map_df.to_parquet(gage_map_file, index=False)
+    logger.info("Saved %d rows → %s", len(gage_map_df), gage_map_file)
 
     return df
