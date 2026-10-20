@@ -1,9 +1,10 @@
 # Data outputs (large files, not version-controlled)
 # data/ffa/ is intentionally NOT ignored — FFA parquets are tracked.
-data/metadata/
-data/streamflow/
-data/nwm/
-data/test/
+**/data/metadata/
+**/data/streamflow/
+**/data/nwm/
+**/data/test/
+**/cache/
 
 # Folders
 meeting_notes/
@@ -33,6 +34,7 @@ build/
 
 # macOS
 .DS_Store
+._*
 
 # IDE
 .vscode/

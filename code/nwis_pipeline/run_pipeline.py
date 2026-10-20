@@ -18,6 +18,7 @@ Usage:
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -28,7 +29,7 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 BASE_DIR   = Path(__file__).parent
 CONFIG_DIR = BASE_DIR / "config"
-DATA_DIR   = Path("/home/ryan/data/flood_hazard")
+DATA_DIR   = Path(os.environ.get("FLOOD_HAZARD_DATA_DIR", "/home/ryan/data/flood_hazard"))
 
 
 # ---------------------------------------------------------------------------

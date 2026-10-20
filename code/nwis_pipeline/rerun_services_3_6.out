@@ -1,0 +1,150 @@
+/netfiles/ciroh/rvanderh/_Flood-Hazard/.venv/lib64/python3.9/site-packages/networkx/utils/backends.py:135: RuntimeWarning: networkx backend defined more than once: nx-loopback
+  backends.update(_get_backends("networkx.backends"))
+2026-10-19 14:29:55  INFO      pipeline — Loaded 9067 gage IDs from /netfiles/ciroh/rvanderh/_Flood-Hazard/code/nwis_pipeline/config/gages.csv
+2026-10-19 14:29:55  INFO      fetch_site_metadata — site_info.parquet already exists — skipping fetch, loading from disk.
+2026-10-19 14:29:55  INFO      pipeline — ============================================================
+2026-10-19 14:29:55  INFO      pipeline — RERUN (services 3-6) — reusing /netfiles/ciroh/rvanderh/_Flood-Hazard/code/nwis_pipeline/data/streamflow/streamflow.parquet
+2026-10-19 14:29:55  INFO      pipeline — ============================================================
+2026-10-19 14:30:16  INFO      pipeline — 6630/9067 gages have stage data
+2026-10-19 14:30:16  INFO      pipeline — ============================================================
+2026-10-19 14:30:16  INFO      pipeline — SERVICE 3: Flood stage thresholds
+2026-10-19 14:30:16  INFO      pipeline — ============================================================
+2026-10-19 14:30:16  INFO      fetch_flood_stages — Fetching NWPS flood stages for 6630 gages
+2026-10-19 14:30:16  INFO      fetch_flood_stages —   HADS cache is 187 days old (> 30); re-downloading
+2026-10-19 14:30:17  INFO      fetch_flood_stages —   Saved HADS crosswalk cache → /netfiles/ciroh/rvanderh/_Flood-Hazard/code/nwis_pipeline/data/metadata/hads_crosswalk.parquet
+2026-10-19 14:30:17  INFO      fetch_flood_stages —   HADS crosswalk: 10449 entries
+2026-10-19 14:30:17  INFO      fetch_flood_stages —   Matched 5611/6630 gages to NWS LIDs via HADS crosswalk
+2026-10-19 14:30:17  INFO      fetch_flood_stages —   1019 gages not in HADS crosswalk (no NWS forecast point)
+2026-10-19 14:30:17  INFO      fetch_flood_stages —   Fetching individual records for 5631 NWPS gauges...
+2026-10-19 14:31:01  INFO      fetch_flood_stages —   Retrieved 4691/5631 NWPS records
+2026-10-19 14:31:01  INFO      fetch_flood_stages —   NLDI fallback: querying 2291 sites without NWM reach_id...
+2026-10-19 14:32:03  INFO      fetch_flood_stages —   NLDI fallback resolved 2265/2291 sites (165 blank NWPS reachIds filled)
+2026-10-19 14:32:03  INFO      fetch_flood_stages —   Flood stage defined: 3286/6630 | Action stage defined: 3360/6630
+2026-10-19 14:32:03  INFO      fetch_flood_stages — Saved 6630 rows → /netfiles/ciroh/rvanderh/_Flood-Hazard/code/nwis_pipeline/data/metadata/flood_stages.parquet
+2026-10-19 14:32:03  INFO      fetch_flood_stages — Saved 6605 rows → /netfiles/ciroh/rvanderh/_Flood-Hazard/code/nwis_pipeline/data/metadata/gage_map.parquet
+2026-10-19 14:32:03  INFO      pipeline — ============================================================
+2026-10-19 14:32:03  INFO      pipeline — SERVICE 4: Fill flood flows from USGS rating curves
+2026-10-19 14:32:03  INFO      pipeline — ============================================================
+2026-10-19 14:32:03  INFO      fetch_rating_curves —   Fetching rating curves for 2808 sites without NWPS flow thresholds...
+2026-10-19 14:32:45  INFO      fetch_rating_curves —   Rating curves: filled flows for 2693 sites; no rating found for 115
+2026-10-19 14:32:45  INFO      fetch_rating_curves —   Thresholds outside the rating table (flow left NaN unless NWPS provided one): 1766 above, 5 below
+2026-10-19 14:32:45  INFO      fetch_rating_curves —   Still NaN after rating curves: action_flow_cfs — 227/3360 sites with stage
+2026-10-19 14:32:45  INFO      fetch_rating_curves —   Still NaN after rating curves: flood_flow_cfs — 343/3286 sites with stage
+2026-10-19 14:32:45  INFO      fetch_rating_curves —   Still NaN after rating curves: moderate_flow_cfs — 577/3038 sites with stage
+2026-10-19 14:32:45  INFO      fetch_rating_curves —   Still NaN after rating curves: major_flow_cfs — 972/2951 sites with stage
+2026-10-19 14:32:45  INFO      fetch_rating_curves — Saved 6630 rows → /netfiles/ciroh/rvanderh/_Flood-Hazard/code/nwis_pipeline/data/metadata/flood_stages.parquet
+2026-10-19 14:32:45  INFO      pipeline — ============================================================
+2026-10-19 14:32:45  INFO      pipeline — SERVICE 5: Bankfull width from StreamStats regional regressions
+2026-10-19 14:32:45  INFO      pipeline — ============================================================
+2026-10-19 14:32:45  INFO      fetch_bankfull_width — Estimating bankfull width for 3286 sites with flood stages
+2026-10-19 14:32:45  INFO      fetch_bankfull_width —   NSS bankfull group ID: 24 (Bankfull Statistics)
+2026-10-19 14:34:23  INFO      fetch_bankfull_width —   NSS bankfull-width equations found for 46/48 states
+2026-10-19 14:34:23  INFO      fetch_bankfull_width —   Bankfull width computed: 3207 sites | no equation: 73 | no DA: 8
+2026-10-19 14:34:23  INFO      fetch_bankfull_width — Saved 3288 rows → /netfiles/ciroh/rvanderh/_Flood-Hazard/code/nwis_pipeline/data/metadata/channel_geometry.parquet
+2026-10-19 14:34:23  INFO      pipeline — ============================================================
+2026-10-19 14:34:23  INFO      pipeline — SERVICE 6: Flood flow threshold percentiles
+2026-10-19 14:34:23  INFO      pipeline — ============================================================
+2026-10-19 14:34:23  INFO      compute_flood_percentiles — Loading discharge from /netfiles/ciroh/rvanderh/_Flood-Hazard/code/nwis_pipeline/data/streamflow/streamflow.parquet
+2026-10-19 14:34:30  INFO      compute_flood_percentiles — Loading flood stages from /netfiles/ciroh/rvanderh/_Flood-Hazard/code/nwis_pipeline/data/metadata/flood_stages.parquet
+2026-10-19 14:34:30  INFO      compute_flood_percentiles — 3217 gages have at least one flow threshold
+2026-10-19 14:34:41  INFO      compute_flood_percentiles — Computed percentiles for 3217 gages (35 flagged short record < 3650 days)
+2026-10-19 14:34:41  INFO      compute_flood_percentiles — Saved → /netfiles/ciroh/rvanderh/_Flood-Hazard/code/nwis_pipeline/data/metadata/flood_threshold_percentiles.parquet
+2026-10-19 14:34:41  INFO      pipeline — ============================================================
+2026-10-19 14:34:41  INFO      pipeline — NHDPlus slope (restores nhd_slope_ft_ft after Service 5)
+2026-10-19 14:34:41  INFO      pipeline — ============================================================
+2026-10-19 14:34:41  INFO      fetch_nhd_slope — Loaded channel_geometry: 3288 rows
+2026-10-19 14:34:41  INFO      fetch_nhd_slope — Sites with reach_id: 6604 / 6605
+2026-10-19 14:34:43  INFO      fetch_nhd_slope —   Querying COMIDs 1 – 100 / 6604
+2026-10-19 14:34:44  INFO      fetch_nhd_slope —   Querying COMIDs 101 – 200 / 6604
+2026-10-19 14:34:45  INFO      fetch_nhd_slope —   Querying COMIDs 201 – 300 / 6604
+2026-10-19 14:34:47  INFO      fetch_nhd_slope —   Querying COMIDs 301 – 400 / 6604
+2026-10-19 14:34:48  INFO      fetch_nhd_slope —   Querying COMIDs 401 – 500 / 6604
+2026-10-19 14:34:49  INFO      fetch_nhd_slope —   Querying COMIDs 501 – 600 / 6604
+2026-10-19 14:34:50  INFO      fetch_nhd_slope —   Querying COMIDs 601 – 700 / 6604
+2026-10-19 14:34:51  INFO      fetch_nhd_slope —   Querying COMIDs 701 – 800 / 6604
+2026-10-19 14:34:52  INFO      fetch_nhd_slope —   Querying COMIDs 801 – 900 / 6604
+2026-10-19 14:34:53  INFO      fetch_nhd_slope —   Querying COMIDs 901 – 1000 / 6604
+2026-10-19 14:34:54  INFO      fetch_nhd_slope —   Querying COMIDs 1001 – 1100 / 6604
+2026-10-19 14:34:55  INFO      fetch_nhd_slope —   Querying COMIDs 1101 – 1200 / 6604
+2026-10-19 14:34:56  INFO      fetch_nhd_slope —   Querying COMIDs 1201 – 1300 / 6604
+2026-10-19 14:34:58  INFO      fetch_nhd_slope —   Querying COMIDs 1301 – 1400 / 6604
+2026-10-19 14:34:59  INFO      fetch_nhd_slope —   Querying COMIDs 1401 – 1500 / 6604
+2026-10-19 14:35:00  INFO      fetch_nhd_slope —   Querying COMIDs 1501 – 1600 / 6604
+2026-10-19 14:35:01  INFO      fetch_nhd_slope —   Querying COMIDs 1601 – 1700 / 6604
+2026-10-19 14:35:02  INFO      fetch_nhd_slope —   Querying COMIDs 1701 – 1800 / 6604
+2026-10-19 14:35:03  INFO      fetch_nhd_slope —   Querying COMIDs 1801 – 1900 / 6604
+2026-10-19 14:35:04  INFO      fetch_nhd_slope —   Querying COMIDs 1901 – 2000 / 6604
+2026-10-19 14:35:05  INFO      fetch_nhd_slope —   Querying COMIDs 2001 – 2100 / 6604
+2026-10-19 14:35:06  INFO      fetch_nhd_slope —   Querying COMIDs 2101 – 2200 / 6604
+2026-10-19 14:35:07  INFO      fetch_nhd_slope —   Querying COMIDs 2201 – 2300 / 6604
+2026-10-19 14:35:08  INFO      fetch_nhd_slope —   Querying COMIDs 2301 – 2400 / 6604
+2026-10-19 14:35:10  INFO      fetch_nhd_slope —   Querying COMIDs 2401 – 2500 / 6604
+2026-10-19 14:35:11  INFO      fetch_nhd_slope —   Querying COMIDs 2501 – 2600 / 6604
+2026-10-19 14:35:12  INFO      fetch_nhd_slope —   Querying COMIDs 2601 – 2700 / 6604
+2026-10-19 14:35:13  INFO      fetch_nhd_slope —   Querying COMIDs 2701 – 2800 / 6604
+2026-10-19 14:35:14  INFO      fetch_nhd_slope —   Querying COMIDs 2801 – 2900 / 6604
+2026-10-19 14:35:15  INFO      fetch_nhd_slope —   Querying COMIDs 2901 – 3000 / 6604
+2026-10-19 14:35:16  INFO      fetch_nhd_slope —   Querying COMIDs 3001 – 3100 / 6604
+2026-10-19 14:35:17  INFO      fetch_nhd_slope —   Querying COMIDs 3101 – 3200 / 6604
+2026-10-19 14:35:18  INFO      fetch_nhd_slope —   Querying COMIDs 3201 – 3300 / 6604
+2026-10-19 14:35:19  INFO      fetch_nhd_slope —   Querying COMIDs 3301 – 3400 / 6604
+2026-10-19 14:35:20  INFO      fetch_nhd_slope —   Querying COMIDs 3401 – 3500 / 6604
+2026-10-19 14:35:21  INFO      fetch_nhd_slope —   Querying COMIDs 3501 – 3600 / 6604
+2026-10-19 14:35:23  INFO      fetch_nhd_slope —   Querying COMIDs 3601 – 3700 / 6604
+2026-10-19 14:35:24  INFO      fetch_nhd_slope —   Querying COMIDs 3701 – 3800 / 6604
+2026-10-19 14:35:25  INFO      fetch_nhd_slope —   Querying COMIDs 3801 – 3900 / 6604
+2026-10-19 14:35:26  INFO      fetch_nhd_slope —   Querying COMIDs 3901 – 4000 / 6604
+2026-10-19 14:35:27  INFO      fetch_nhd_slope —   Querying COMIDs 4001 – 4100 / 6604
+2026-10-19 14:35:28  INFO      fetch_nhd_slope —   Querying COMIDs 4101 – 4200 / 6604
+2026-10-19 14:35:29  INFO      fetch_nhd_slope —   Querying COMIDs 4201 – 4300 / 6604
+2026-10-19 14:35:30  INFO      fetch_nhd_slope —   Querying COMIDs 4301 – 4400 / 6604
+2026-10-19 14:35:31  INFO      fetch_nhd_slope —   Querying COMIDs 4401 – 4500 / 6604
+2026-10-19 14:35:32  INFO      fetch_nhd_slope —   Querying COMIDs 4501 – 4600 / 6604
+2026-10-19 14:35:34  INFO      fetch_nhd_slope —   Querying COMIDs 4601 – 4700 / 6604
+2026-10-19 14:35:35  INFO      fetch_nhd_slope —   Querying COMIDs 4701 – 4800 / 6604
+2026-10-19 14:35:36  INFO      fetch_nhd_slope —   Querying COMIDs 4801 – 4900 / 6604
+2026-10-19 14:35:37  INFO      fetch_nhd_slope —   Querying COMIDs 4901 – 5000 / 6604
+2026-10-19 14:35:38  INFO      fetch_nhd_slope —   Querying COMIDs 5001 – 5100 / 6604
+2026-10-19 14:35:39  INFO      fetch_nhd_slope —   Querying COMIDs 5101 – 5200 / 6604
+2026-10-19 14:35:40  INFO      fetch_nhd_slope —   Querying COMIDs 5201 – 5300 / 6604
+2026-10-19 14:35:41  INFO      fetch_nhd_slope —   Querying COMIDs 5301 – 5400 / 6604
+2026-10-19 14:35:42  INFO      fetch_nhd_slope —   Querying COMIDs 5401 – 5500 / 6604
+2026-10-19 14:35:43  INFO      fetch_nhd_slope —   Querying COMIDs 5501 – 5600 / 6604
+2026-10-19 14:35:44  INFO      fetch_nhd_slope —   Querying COMIDs 5601 – 5700 / 6604
+2026-10-19 14:35:45  INFO      fetch_nhd_slope —   Querying COMIDs 5701 – 5800 / 6604
+2026-10-19 14:35:46  INFO      fetch_nhd_slope —   Querying COMIDs 5801 – 5900 / 6604
+2026-10-19 14:35:48  INFO      fetch_nhd_slope —   Querying COMIDs 5901 – 6000 / 6604
+2026-10-19 14:35:49  INFO      fetch_nhd_slope —   Querying COMIDs 6001 – 6100 / 6604
+2026-10-19 14:35:50  INFO      fetch_nhd_slope —   Querying COMIDs 6101 – 6200 / 6604
+2026-10-19 14:35:51  INFO      fetch_nhd_slope —   Querying COMIDs 6201 – 6300 / 6604
+2026-10-19 14:35:52  INFO      fetch_nhd_slope —   Querying COMIDs 6301 – 6400 / 6604
+2026-10-19 14:35:53  INFO      fetch_nhd_slope —   Querying COMIDs 6401 – 6500 / 6604
+2026-10-19 14:35:54  INFO      fetch_nhd_slope —   Querying COMIDs 6501 – 6600 / 6604
+2026-10-19 14:35:55  INFO      fetch_nhd_slope —   Querying COMIDs 6601 – 6604 / 6604
+2026-10-19 14:35:56  INFO      fetch_nhd_slope — Slope retrieved: 6604 / 6604 sites with reach_id
+2026-10-19 14:35:56  INFO      fetch_nhd_slope —   Appending 3319 reach_id sites absent from channel_geometry (no flood stage)
+2026-10-19 14:35:56  INFO      fetch_nhd_slope — Saved 6607 rows → /netfiles/ciroh/rvanderh/_Flood-Hazard/code/nwis_pipeline/data/metadata/channel_geometry.parquet
+2026-10-19 14:35:56  INFO      pipeline — ============================================================
+2026-10-19 14:35:56  INFO      pipeline — Specific stream power
+2026-10-19 14:35:56  INFO      pipeline — ============================================================
+2026-10-19 14:35:56  INFO      compute_ssp —   action: 2922 valid SSP, 3143 valid TSP / 6607 sites
+2026-10-19 14:35:56  INFO      compute_ssp —   flood: 2875 valid SSP, 2955 valid TSP / 6607 sites
+2026-10-19 14:35:56  INFO      compute_ssp —   moderate: 2397 valid SSP, 2473 valid TSP / 6607 sites
+2026-10-19 14:35:56  INFO      compute_ssp —   major: 1946 valid SSP, 1989 valid TSP / 6607 sites
+2026-10-19 14:35:56  INFO      pipeline — Saved 6607 rows → /netfiles/ciroh/rvanderh/_Flood-Hazard/code/nwis_pipeline/data/metadata/stream_power.parquet
+2026-10-19 14:35:56  INFO      pipeline — ============================================================
+2026-10-19 14:35:56  INFO      pipeline — VALIDATION
+2026-10-19 14:35:56  INFO      pipeline — ============================================================
+2026-10-19 14:35:58  INFO      pipeline — Pipeline funnel: 9067 total → 9066 metadata → 8966 discharge → 6630 stage → 3286 flood threshold → 6604 reach_id
+2026-10-19 14:35:58  WARNING   pipeline — 1 sites in gage_map have null reach_id
+2026-10-19 14:35:58  INFO      pipeline — ============================================================
+2026-10-19 14:35:58  INFO      pipeline — DATA COVERAGE SUMMARY
+2026-10-19 14:35:58  INFO      pipeline — ============================================================
+/netfiles/ciroh/rvanderh/_Flood-Hazard/code/nwis_pipeline/run_pipeline.py:100: FutureWarning: Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated and will change in a future version. Call result.infer_objects(copy=False) instead. To opt-in to the future behavior, set `pd.set_option('future.no_silent_downcasting', True)`
+  coverage["has_stage_data"] = coverage["has_stage_data"].fillna(False)
+/netfiles/ciroh/rvanderh/_Flood-Hazard/code/nwis_pipeline/run_pipeline.py:102: FutureWarning: Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated and will change in a future version. Call result.infer_objects(copy=False) instead. To opt-in to the future behavior, set `pd.set_option('future.no_silent_downcasting', True)`
+  coverage[col] = coverage[col].fillna(False)
+/netfiles/ciroh/rvanderh/_Flood-Hazard/code/nwis_pipeline/run_pipeline.py:114: FutureWarning: Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated and will change in a future version. Call result.infer_objects(copy=False) instead. To opt-in to the future behavior, set `pd.set_option('future.no_silent_downcasting', True)`
+  coverage["has_reach_id"] = coverage["has_reach_id"].fillna(False)
+2026-10-19 14:35:58  INFO      pipeline — Saved coverage summary → /netfiles/ciroh/rvanderh/_Flood-Hazard/code/nwis_pipeline/data/metadata/data_coverage.parquet
+2026-10-19 14:35:58  INFO      pipeline — Rerun complete.
