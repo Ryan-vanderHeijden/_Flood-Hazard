@@ -128,7 +128,7 @@ Three files are written:
 
 **Service 5** estimates bankfull channel width for every gage with a defined flood stage threshold using drainage-area-based regional regression equations from the [USGS StreamStats NSS API](https://streamstats.usgs.gov/nssservices). Only DRNAREA-only equations are applied; multi-variable equations are skipped. Output: `data/metadata/channel_geometry.parquet` (columns: `site_no`, `bankfull_width_ft`, `bkfw_equation`, `bkfw_region`, `bkfw_da_min_sqmi`, `bkfw_da_max_sqmi`, `bkfw_da_in_range`).
 
-**Service 6** computes the non-exceedance percentile of each NWS flood flow threshold (action / flood / moderate / major) within each gage's historical daily discharge distribution using the Weibull plotting position. Sites with fewer than 3,650 valid days (~10 years) are flagged `record_ok = False`. Output: `data/metadata/flood_threshold_percentiles.parquet` (columns: `site_no`, `n_valid_days`, `record_ok`, `action_flow_pct`, `flood_flow_pct`, `moderate_flow_pct`, `major_flow_pct`).
+**Service 6** computes the non-exceedance percentile of each NWS flood flow threshold (action / minor / moderate / major) within each gage's historical daily discharge distribution using the Weibull plotting position. Sites with fewer than 3,650 valid days (~10 years) are flagged `record_ok = False`. Output: `data/metadata/flood_threshold_percentiles.parquet` (columns: `site_no`, `n_valid_days`, `record_ok`, `action_flow_pct`, `minor_flow_pct`, `moderate_flow_pct`, `major_flow_pct`).
 
 A log file (`pipeline.log`) is written alongside `run_pipeline.py` on every run.
 
@@ -142,7 +142,7 @@ Two scripts run independently of the main pipeline (not called by `run_pipeline.
 python code/nwis_pipeline/src/fetch_NHDPlus_slope.py
 ```
 
-**`src/compute_specific_stream_power.py`** — computes specific stream power (W/m²) at each NWS flood threshold using ω = (γ·Q·S)/w, where γ = 9800 N/m³. Requires `channel_geometry.parquet` (bankfull width + NHD slope) and `flood_stages.parquet` (flood flow thresholds). Output: `data/metadata/stream_power.parquet` (columns: `site_no`, `action_ssp_wm2`, `flood_ssp_wm2`, `moderate_ssp_wm2`, `major_ssp_wm2`).
+**`src/compute_specific_stream_power.py`** — computes specific stream power (W/m²) at each NWS flood threshold using ω = (γ·Q·S)/w, where γ = 9800 N/m³. Requires `channel_geometry.parquet` (bankfull width + NHD slope) and `flood_stages.parquet` (flood flow thresholds). Output: `data/metadata/stream_power.parquet` (columns: `site_no`, `action_ssp_wm2`, `minor_ssp_wm2`, `moderate_ssp_wm2`, `major_ssp_wm2`).
 
 ```bash
 python code/nwis_pipeline/src/compute_specific_stream_power.py
@@ -249,7 +249,7 @@ Cluster assignments are exported as CSVs (`site_regions_*.csv`) with columns `si
 
 ## Analysis — Flood Impact Text (`code/ffa_analysis/`)
 
-Analysis of the free-text NWS impact descriptions in `flood_stages.parquet` (action / flood / moderate / major stages, ~8,100 non-null descriptions).
+Analysis of the free-text NWS impact descriptions in `flood_stages.parquet` (action / minor / moderate / major stages, ~8,100 non-null descriptions).
 
 ### Step 1 — TF-IDF exploration (`flood_impact_tfidf.ipynb`)
 

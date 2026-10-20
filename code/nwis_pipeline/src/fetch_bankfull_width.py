@@ -411,8 +411,8 @@ def fetch_bankfull_width(
     Args:
         site_info:    DataFrame with [site_no, drainage_area_sqmi, state_cd].
                       state_cd is a 2-digit FIPS code string (e.g. "50" for VT).
-        flood_stages: DataFrame with [site_no, flood_stage_ft, ...].
-                      Only sites with a non-NaN flood_stage_ft are processed.
+        flood_stages: DataFrame with [site_no, minor_stage_ft, ...].
+                      Only sites with a non-NaN minor_stage_ft are processed.
         out_path:     Directory where channel_geometry.parquet is written.
 
     Returns:
@@ -421,7 +421,7 @@ def fetch_bankfull_width(
          bkfw_da_min_sqmi, bkfw_da_max_sqmi, bkfw_da_in_range].
     """
     # Sites with at least one flood stage
-    has_stage = flood_stages["flood_stage_ft"].notna()
+    has_stage = flood_stages["minor_stage_ft"].notna()
     target_sites = flood_stages.loc[has_stage, "site_no"].tolist()
 
     logger.info(

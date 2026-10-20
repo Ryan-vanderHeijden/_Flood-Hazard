@@ -14,7 +14,7 @@ HT_DIR = os.path.join(FIM_DIR, "ne_hydrotables")
 CFS2CMS = 0.0283168; M2FT = 3.28084
 RPS = [2,5,10,25,50,100,200,500]
 CATS = [("action","action_stage_ft","action_flow_cfs"),
-        ("flood","flood_stage_ft","flood_flow_cfs"),
+        ("minor","minor_stage_ft","minor_flow_cfs"),
         ("moderate","moderate_stage_ft","moderate_flow_cfs"),
         ("major","major_stage_ft","major_flow_cfs")]
 USECOLS = ["feature_id","branch_id","stage","discharge_cms","default_discharge_cms","order_"]

@@ -43,7 +43,7 @@ _RC_MAX_WORKERS = 30
 # Stage-to-flow threshold pairs (stage col → flow col)
 _THRESHOLD_PAIRS = [
     ("action_stage_ft",   "action_flow_cfs"),
-    ("flood_stage_ft",    "flood_flow_cfs"),
+    ("minor_stage_ft",    "minor_flow_cfs"),
     ("moderate_stage_ft", "moderate_flow_cfs"),
     ("major_stage_ft",    "major_flow_cfs"),
 ]

@@ -1,7 +1,7 @@
 """
 Publication maps — LP3 return periods of the NWS flood thresholds, CONUS.
 
-One panel per threshold (action / flood / moderate / major).  Each QC-passing
+One panel per threshold (action / minor / moderate / major).  Each QC-passing
 site is a dot coloured by its return-period class.  Thresholds whose stage is
 above the USGS rating table have no flow, only a lower bound on the return
 period (<level>_return_period_lb_yr); they are drawn as up-triangles ("at
@@ -43,7 +43,7 @@ FIG_DIR  = DATA_DIR / "figures"
 
 LEVELS = [
     ("action",   "Action"),
-    ("flood",    "Minor"),
+    ("minor",    "Minor"),
     ("moderate", "Moderate"),
     ("major",    "Major"),
 ]

@@ -76,18 +76,18 @@ def compute_specific_stream_power(
     channel_geometry : DataFrame with columns
         site_no, bankfull_width_ft, nhd_slope_ft_ft
     flood_stages : DataFrame with columns
-        site_no, action_flow_cfs, flood_flow_cfs, moderate_flow_cfs, major_flow_cfs
+        site_no, action_flow_cfs, minor_flow_cfs, moderate_flow_cfs, major_flow_cfs
 
     Returns
     -------
     DataFrame with columns:
         site_no,
-        action_ssp_wm2, flood_ssp_wm2, moderate_ssp_wm2, major_ssp_wm2   (specific, W/m²)
-        action_tsp_wm,  flood_tsp_wm,  moderate_tsp_wm,  major_tsp_wm     (total, W/m)
+        action_ssp_wm2, minor_ssp_wm2, moderate_ssp_wm2, major_ssp_wm2   (specific, W/m²)
+        action_tsp_wm,  minor_tsp_wm,  moderate_tsp_wm,  major_tsp_wm     (total, W/m)
     """
     # Merge on site_no
     df = channel_geometry[["site_no", "bankfull_width_ft", "nhd_slope_ft_ft"]].merge(
-        flood_stages[["site_no", "action_flow_cfs", "flood_flow_cfs",
+        flood_stages[["site_no", "action_flow_cfs", "minor_flow_cfs",
                       "moderate_flow_cfs", "major_flow_cfs"]],
         on="site_no",
         how="inner",
@@ -96,11 +96,11 @@ def compute_specific_stream_power(
     # Unit conversions
     # slope: ft/ft is dimensionless — same numeric value in m/m, no conversion
     df["width_m"] = df["bankfull_width_ft"] * FT_TO_M
-    for col in ["action_flow_cfs", "flood_flow_cfs", "moderate_flow_cfs", "major_flow_cfs"]:
+    for col in ["action_flow_cfs", "minor_flow_cfs", "moderate_flow_cfs", "major_flow_cfs"]:
         df[col.replace("_cfs", "_cms")] = df[col] * CFS_TO_CMS
 
     # Compute specific (ω, W/m²) and total (Ω, W/m) stream power for each threshold
-    for threshold in ("action", "flood", "moderate", "major"):
+    for threshold in ("action", "minor", "moderate", "major"):
         df[f"{threshold}_ssp_wm2"] = df.apply(
             lambda row, t=threshold: specific_stream_power(
                 Q=row[f"{t}_flow_cms"],
@@ -127,15 +127,15 @@ def compute_specific_stream_power(
         )
 
     n_total = len(df)
-    for threshold in ("action", "flood", "moderate", "major"):
+    for threshold in ("action", "minor", "moderate", "major"):
         n_ssp = df[f"{threshold}_ssp_wm2"].notna().sum()
         n_tsp = df[f"{threshold}_tsp_wm"].notna().sum()
         logger.info("  %s: %d valid SSP, %d valid TSP / %d sites", threshold, n_ssp, n_tsp, n_total)
 
     out_cols = ["site_no",
-                "action_ssp_wm2", "flood_ssp_wm2",
+                "action_ssp_wm2", "minor_ssp_wm2",
                 "moderate_ssp_wm2", "major_ssp_wm2",
-                "action_tsp_wm", "flood_tsp_wm",
+                "action_tsp_wm", "minor_tsp_wm",
                 "moderate_tsp_wm", "major_tsp_wm"]
     return df[out_cols].reset_index(drop=True)
 

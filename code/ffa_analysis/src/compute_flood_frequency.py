@@ -69,11 +69,11 @@ _MGBT_RNG_SEED = 3
 
 _THRESHOLD_FLOWS = [
     "action_flow_cfs",
-    "flood_flow_cfs",
+    "minor_flow_cfs",
     "moderate_flow_cfs",
     "major_flow_cfs",
 ]
-_LEVELS = ["action", "flood", "moderate", "major"]
+_LEVELS = ["action", "minor", "moderate", "major"]
 _RATING_MAX_FLOW = "rating_max_flow_cfs"
 
 _REGIONAL_SKEW_FILE = Path(__file__).parent.parent / "data" / "regional_skew_lookup.csv"
@@ -753,7 +753,7 @@ _CL_EMPTY = dict(
 def _fit_site_worker(args: tuple) -> dict:
     """Classify peaks and fit LP3 for one site. Runs in a worker process."""
     site, peaks_df, threshold_flows, min_peaks = args
-    # threshold_flows: (action, flood, moderate, major) in cfs, NaN where absent
+    # threshold_flows: (action, minor, moderate, major) in cfs, NaN where absent
 
     cl = _classify_peaks(peaks_df) if peaks_df is not None else _CL_EMPTY
 

@@ -15,7 +15,7 @@ si = pd.read_parquet("/home/ryan/data/flood_hazard/metadata/site_info.parquet",
 v = v.merge(si, on="site_no", how="left")
 
 # HAND stage-rise residual (predicted - observed), per category
-for cat in ["flood","moderate","major"]:
+for cat in ["minor","moderate","major"]:
     v[f"res_{cat}"] = (v[f"h2_{cat}"]-v["h2_action"]) - (v[f"{cat}_stage_ft"]-v["action_stage_ft"])
 
 fig = plt.figure(figsize=(15,10)); gs = fig.add_gridspec(2,3)
@@ -30,7 +30,7 @@ axA.set_title("Residual vs stream order"); axA.grid(alpha=0.3)
 
 # --- B: residual vs drainage area ---
 axB = fig.add_subplot(gs[0,1])
-for cat,c in [("flood","#2e86ab"),("major","#d1495b")]:
+for cat,c in [("minor","#2e86ab"),("major","#d1495b")]:
     m=v["drainage_area_sqmi"].notna()&v[f"res_{cat}"].notna()
     axB.scatter(v.loc[m,"drainage_area_sqmi"],v.loc[m,f"res_{cat}"],s=16,alpha=0.6,c=c,label=cat)
 axB.set_xscale("log"); axB.axhline(0,color="k",lw=0.6); axB.set_xlabel("drainage area (sq mi)")
@@ -38,7 +38,7 @@ axB.set_ylabel("residual (ft)"); axB.set_title("Residual vs drainage area"); axB
 
 # --- C: residual vs reach slope ---
 axC = fig.add_subplot(gs[0,2])
-for cat,c in [("flood","#2e86ab"),("major","#d1495b")]:
+for cat,c in [("minor","#2e86ab"),("major","#d1495b")]:
     m=(v["slope"]>0)&v[f"res_{cat}"].notna()
     axC.scatter(v.loc[m,"slope"],v.loc[m,f"res_{cat}"],s=16,alpha=0.6,c=c,label=cat)
 axC.set_xscale("log"); axC.axhline(0,color="k",lw=0.6); axC.set_xlabel("reach slope (m/m)")
