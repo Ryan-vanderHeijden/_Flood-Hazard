@@ -35,7 +35,7 @@ from matplotlib.patches import Patch, RegularPolygon
 
 from make_rp_maps import (
     COLORS, CONUS_EXTENT, DOT_EDGE, FIG_DIR, HATCH, HATCH_INK, INK_2, LAND,
-    LABELS, LEVELS, NORM, PROJ, STATE, _conus_geoms, km_median, load_sites,
+    LABELS, LEVELS, NORM, PROJ, STATE, TITLE_FONT, _conus_geoms, km_median, load_sites,
     split_sites,
 )
 
@@ -102,7 +102,7 @@ def draw_panel(ax, hexes: pd.DataFrame, title: str, h: float, min_sites: int,
                 transform=PROJ, zorder=3,
             ))
 
-    ax.set_title(title, loc="left", fontweight="bold", pad=2)
+    ax.set_title(title, loc="left", pad=2, fontdict=TITLE_FONT)
     n_bound = int(shown["is_bound"].sum())
     ax.text(0.0, -0.02,
             f"{len(shown):,} hexagons · {int(shown['n'].sum()):,} sites"

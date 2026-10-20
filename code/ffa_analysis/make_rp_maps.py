@@ -26,6 +26,7 @@ import argparse
 from pathlib import Path
 
 import cartopy.crs as ccrs
+import matplotlib.font_manager as fm
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -82,6 +83,17 @@ plt.rcParams.update({
     "pdf.fonttype": 42,     # editable text in Illustrator
     "savefig.dpi": 300,
 })
+
+# Panel titles in Literata SemiBold (the static faces ship without a Bold),
+# loaded from the shared assets repo; fall back to Fira Sans if it is absent.
+_LITERATA = Path.home() / "data" / "assets" / "fonts" / "Literata"
+for _ttf in sorted(_LITERATA.glob("Literata-*.ttf")):
+    fm.fontManager.addfont(str(_ttf))
+TITLE_FONT = (
+    {"family": "Literata", "weight": "semibold", "size": 9}
+    if any(f.name == "Literata" for f in fm.fontManager.ttflist)
+    else {"family": "Fira Sans", "weight": "bold", "size": 8}
+)
 
 
 def _conus_geoms():
@@ -198,7 +210,7 @@ def draw_panel(ax, sites: pd.DataFrame, level: str, title: str, geoms,
         np.concatenate([pts["v"].to_numpy(), bnd["v"].to_numpy()]),
         np.r_[np.zeros(len(pts), bool), np.ones(len(bnd), bool)],
     )
-    ax.set_title(title, loc="left", fontweight="bold", pad=2)
+    ax.set_title(title, loc="left", pad=2, fontdict=TITLE_FONT)
     ax.text(0.0, -0.02,
             f"{len(pts) + len(bnd):,} sites ({len(bnd):,} lower bounds)"
             f" · median {med:.1f} yr",
