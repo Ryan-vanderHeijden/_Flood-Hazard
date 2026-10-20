@@ -105,7 +105,7 @@ def draw_panel(ax, hexes: pd.DataFrame, title: str, h: float, min_sites: int,
     ax.set_title(title, loc="left", pad=2, fontdict=TITLE_FONT)
     n_bound = int(shown["is_bound"].sum())
     ax.text(0.0, -0.02,
-            f"{len(shown):,} hexagons · {int(shown['n'].sum()):,} sites"
+            f"{int(shown['n'].sum()):,} sites · {len(shown):,} hexagons"
             f" · {n_bound} with a lower-bound median",
             transform=ax.transAxes, ha="left", va="top", color=INK_2, fontsize=6)
 
