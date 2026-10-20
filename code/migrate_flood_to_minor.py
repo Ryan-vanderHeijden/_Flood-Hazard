@@ -21,6 +21,8 @@ Usage:
   python code/migrate_flood_to_minor.py --root /path/to/data --apply   # e.g. on the VM
 """
 
+from __future__ import annotations   # `dict | None` on the VM's Python 3.9
+
 import argparse
 import re
 import shutil
