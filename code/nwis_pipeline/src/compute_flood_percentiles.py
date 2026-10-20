@@ -5,7 +5,7 @@ Service 6: Compute the non-exceedance percentile of each NWS flood flow
 threshold within the USGS observed daily discharge distribution.
 
 For each streamgage, the historical discharge record is treated as an
-empirical CDF.  Each threshold flow (action / flood / moderate / major) is
+empirical CDF.  Each threshold flow (action / minor / moderate / major) is
 located on that CDF: the resulting value is the fraction of valid observed
 days on which discharge was at or below the threshold.
 
@@ -19,7 +19,7 @@ Algorithm:
 
 Output: data/metadata/flood_threshold_percentiles.parquet
 Columns: site_no, n_valid_days, record_ok,
-         action_flow_pct, flood_flow_pct, moderate_flow_pct, major_flow_pct
+         action_flow_pct, minor_flow_pct, moderate_flow_pct, major_flow_pct
 """
 
 import logging
@@ -34,7 +34,7 @@ _MIN_VALID_DAYS = 3_650  # ~10 years
 
 _THRESHOLD_COLS = [
     "action_flow_cfs",
-    "flood_flow_cfs",
+    "minor_flow_cfs",
     "moderate_flow_cfs",
     "major_flow_cfs",
 ]
@@ -67,7 +67,7 @@ def compute_flood_percentiles(
     Returns
     -------
     DataFrame with columns: site_no, n_valid_days, record_ok,
-        action_flow_pct, flood_flow_pct, moderate_flow_pct, major_flow_pct.
+        action_flow_pct, minor_flow_pct, moderate_flow_pct, major_flow_pct.
     """
     sf_file = streamflow_path / "streamflow.parquet"
     fs_file = flood_stages_path / "flood_stages.parquet"

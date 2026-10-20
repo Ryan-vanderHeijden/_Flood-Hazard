@@ -5,11 +5,11 @@ Service 3: Fetch NWS flood stage thresholds for each gage.
 
 Thresholds retrieved (where available):
   action_stage    — Stage at which NWS issues an action alert (ft)
-  flood_stage     — Stage at which minor flooding begins (ft)
+  minor_stage     — Stage at which minor flooding begins (ft)
   moderate_stage  — Stage at which moderate flooding begins (ft)
   major_stage     — Stage at which major flooding begins (ft)
   action_flow     — Discharge at action stage (cfs)
-  flood_flow      — Discharge at minor flood stage (cfs)
+  minor_flow      — Discharge at minor flood stage (cfs)
   moderate_flow   — Discharge at moderate flood stage (cfs)
   major_flow      — Discharge at major flood stage (cfs)
   *_impact        — NWS impact statement for each flood category
@@ -165,15 +165,15 @@ def _extract_stages(record: dict) -> dict:
 
     return {
         "action_stage_ft":   _val("action",   "stage"),
-        "flood_stage_ft":    _val("minor",    "stage"),
+        "minor_stage_ft":    _val("minor",    "stage"),
         "moderate_stage_ft": _val("moderate", "stage"),
         "major_stage_ft":    _val("major",    "stage"),
         "action_flow_cfs":   _val("action",   "flow"),
-        "flood_flow_cfs":    _val("minor",    "flow"),
+        "minor_flow_cfs":    _val("minor",    "flow"),
         "moderate_flow_cfs": _val("moderate", "flow"),
         "major_flow_cfs":    _val("major",    "flow"),
         "action_impact":     _impact("action"),
-        "flood_impact":      _impact("minor"),
+        "minor_impact":      _impact("minor"),
         "moderate_impact":   _impact("moderate"),
         "major_impact":      _impact("major"),
     }
@@ -196,9 +196,9 @@ def fetch_flood_stages(
                      old), it is loaded from disk instead of re-downloaded.
 
     Returns:
-        DataFrame with columns [site_no, action_stage_ft, flood_stage_ft,
-        moderate_stage_ft, major_stage_ft, action_flow_cfs, flood_flow_cfs,
-        moderate_flow_cfs, major_flow_cfs, action_impact, flood_impact,
+        DataFrame with columns [site_no, action_stage_ft, minor_stage_ft,
+        moderate_stage_ft, major_stage_ft, action_flow_cfs, minor_flow_cfs,
+        moderate_flow_cfs, major_flow_cfs, action_impact, minor_impact,
         moderate_impact, major_impact].  Rows are present for every entry
         in gage_ids; missing values are NaN / None.
 
@@ -206,9 +206,9 @@ def fetch_flood_stages(
         Sites resolved via NLDI fallback appear in gage_map with lid=None.
     """
     stage_cols = [
-        "action_stage_ft", "flood_stage_ft", "moderate_stage_ft", "major_stage_ft",
-        "action_flow_cfs",  "flood_flow_cfs",  "moderate_flow_cfs",  "major_flow_cfs",
-        "action_impact",    "flood_impact",    "moderate_impact",    "major_impact",
+        "action_stage_ft", "minor_stage_ft", "moderate_stage_ft", "major_stage_ft",
+        "action_flow_cfs",  "minor_flow_cfs",  "moderate_flow_cfs",  "major_flow_cfs",
+        "action_impact",    "minor_impact",    "moderate_impact",    "major_impact",
     ]
     empty = pd.DataFrame(columns=["site_no"] + stage_cols)
 
@@ -359,11 +359,11 @@ def fetch_flood_stages(
         if col not in df.columns:
             df[col] = float("nan")
 
-    n_flood  = df["flood_stage_ft"].notna().sum()
+    n_minor  = df["minor_stage_ft"].notna().sum()
     n_action = df["action_stage_ft"].notna().sum()
     logger.info(
-        "  Flood stage defined: %d/%d | Action stage defined: %d/%d",
-        n_flood, len(df), n_action, len(df),
+        "  Minor stage defined: %d/%d | Action stage defined: %d/%d",
+        n_minor, len(df), n_action, len(df),
     )
 
     out_path.mkdir(parents=True, exist_ok=True)

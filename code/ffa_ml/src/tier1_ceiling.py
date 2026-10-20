@@ -1,7 +1,7 @@
 """Tier-1 SRC ceiling test: can a floodplain/compound section rescue Manning+Bieger?
 
 Datum-independent validation: compare predicted vs observed STAGE RISE from the
-'action' category up to flood/moderate/major, across section models. If a calibrated
+'action' category up to minor/moderate/major, across section models. If a calibrated
 floodplain-widening term lifts corr from ~0.3 toward ~0.7, Tier-1.5 is viable; if not,
 the limit is per-reach geometry (needs HAND / Tier 2).
 """
@@ -13,7 +13,7 @@ FIM_DIR = os.path.expanduser("~/data/flood_hazard/fim_hand")
 df = pd.read_parquet(os.path.join(FIM_DIR, "src_gauge_proto.parquet"))
 N = 0.045; CFS2CMS = 0.0283168; M2FT = 3.28084
 CATS = [("action","action_stage_ft","action_flow_cfs"),
-        ("flood","flood_stage_ft","flood_flow_cfs"),
+        ("minor","minor_stage_ft","minor_flow_cfs"),
         ("moderate","moderate_stage_ft","moderate_flow_cfs"),
         ("major","major_stage_ft","major_flow_cfs")]
 

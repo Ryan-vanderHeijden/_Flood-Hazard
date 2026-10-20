@@ -22,7 +22,7 @@ DATA_PATH     = '/home/ryan/data/flood_hazard/metadata/flood_stages.parquet'
 OUTPUT_PATH   = '/home/ryan/data/flood_hazard/metadata/flood_impact_tags.parquet'
 BATCH_ID_PATH = '/home/ryan/data/flood_hazard/metadata/impact_batch_id.txt'
 
-LEVELS = ['action', 'flood', 'moderate', 'major']
+LEVELS = ['action', 'minor', 'moderate', 'major']
 MODEL  = 'claude-haiku-4-5-20251001'
 
 # ---------------------------------------------------------------------------

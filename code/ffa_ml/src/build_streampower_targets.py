@@ -11,7 +11,7 @@ period* proved near-unpredictable from watershed attributes.  Two families:
   * specific stream power  ω = γ·Q·S / w   (``*_ssp_wm2``, W/m²)
   * total stream power     Ω = γ·Q·S       (``*_tsp_wm``,  W/m)
 
-for the action / flood / moderate / major thresholds, from
+for the action / minor / moderate / major thresholds, from
 ``metadata/stream_power.parquet``.
 
 Rather than re-derive the FFA QC screening, this reads the already-screened
@@ -41,7 +41,7 @@ TARGETS_PATH = ML_DIR / "targets.parquet"
 STREAM_POWER_PATH = META_DIR / "stream_power.parquet"
 OUT_PATH = ML_DIR / "streampower_targets.parquet"
 
-THRESHOLDS = ["action", "flood", "moderate", "major"]
+THRESHOLDS = ["action", "minor", "moderate", "major"]
 # raw stream-power column -> log10 target name
 SP_COLS = {f"{t}_ssp_wm2": f"log_{t}_ssp" for t in THRESHOLDS}
 SP_COLS.update({f"{t}_tsp_wm": f"log_{t}_tsp" for t in THRESHOLDS})

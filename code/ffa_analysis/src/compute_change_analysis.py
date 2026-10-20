@@ -9,10 +9,10 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # NWS threshold → LP3 standard quantile pairings (matched by median RP)
-# Empirical medians: action≈1.8yr, flood≈3.4yr, moderate≈9.5yr, major≈28.2yr
+# Empirical medians: action≈1.8yr, minor≈3.4yr, moderate≈9.5yr, major≈28.2yr
 _PAIRINGS = [
     ("action_flow_cfs",   "q2_cfs",  "action_q2"),
-    ("flood_flow_cfs",    "q5_cfs",  "flood_q5"),
+    ("minor_flow_cfs",    "q5_cfs",  "minor_q5"),
     ("moderate_flow_cfs", "q10_cfs", "moderate_q10"),
     ("major_flow_cfs",    "q30_cfs", "major_q30"),
 ]

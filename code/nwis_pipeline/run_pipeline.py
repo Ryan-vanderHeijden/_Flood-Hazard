@@ -4,7 +4,7 @@ Data acquisition pipeline — CIROH Flood Hazard Thresholds Project.
 Services run in sequence:
   1. Site metadata    — lat, lon, elevation, drainage area, period of record
   2. Streamflow       — daily discharge + stage from USGS NWIS (per-site date ranges)
-  3. Flood stages     — action / flood / moderate / major thresholds (NWS NWPS)
+  3. Flood stages     — action / minor / moderate / major thresholds (NWS NWPS)
   4. Rating curves    — fill NaN flood flow thresholds via USGS stage-discharge ratings
   5. Bankfull width   — estimate bankfull channel width via StreamStats regional regressions
   6. Percentiles      — non-exceedance percentile of each flood flow threshold in observed record
@@ -87,18 +87,18 @@ def _summarize_coverage(
 
     # Threshold availability from flood stages (after rating-curve fill)
     threshold_coverage = flood_stages[["site_no"]].copy()
-    threshold_coverage["has_flood_stage"] = flood_stages["flood_stage_ft"].notna()
+    threshold_coverage["has_minor_stage"] = flood_stages["minor_stage_ft"].notna()
     threshold_coverage["has_action_stage"] = flood_stages["action_stage_ft"].notna()
     threshold_coverage["has_moderate_stage"] = flood_stages["moderate_stage_ft"].notna()
     threshold_coverage["has_major_stage"] = flood_stages["major_stage_ft"].notna()
-    threshold_coverage["has_flood_flow"] = flood_stages["flood_flow_cfs"].notna()
+    threshold_coverage["has_minor_flow"] = flood_stages["minor_flow_cfs"].notna()
 
     coverage = pd.DataFrame({"site_no": gage_ids}).merge(
         stage_coverage, on="site_no", how="left"
     ).merge(threshold_coverage, on="site_no", how="left")
 
     coverage["has_stage_data"] = coverage["has_stage_data"].fillna(False)
-    for col in ("has_flood_stage", "has_action_stage", "has_moderate_stage", "has_major_stage", "has_flood_flow"):
+    for col in ("has_minor_stage", "has_action_stage", "has_moderate_stage", "has_major_stage", "has_minor_flow"):
         coverage[col] = coverage[col].fillna(False)
 
     # Reach ID availability from gage_map (includes NLDI-resolved sites)
@@ -149,7 +149,7 @@ def _validate_outputs(
     else:
         n_stage = 0
 
-    n_flood_threshold = int(flood_stages["flood_stage_ft"].notna().sum()) if not flood_stages.empty else 0
+    n_flood_threshold = int(flood_stages["minor_stage_ft"].notna().sum()) if not flood_stages.empty else 0
     n_reach = int(gage_map["reach_id"].notna().sum()) if not gage_map.empty else 0
 
     logger.info(
