@@ -78,6 +78,13 @@ _RATING_MAX_FLOW = "rating_max_flow_cfs"
 
 _REGIONAL_SKEW_FILE = Path(__file__).parent.parent / "data" / "regional_skew_lookup.csv"
 
+# Skew used for threshold AEPs, return periods and standard quantiles:
+#   "station"  — at-site EMA skew everywhere (consistent across CONUS)
+#   "weighted" — B17C Eq. 4-3 weighted skew where a regional study exists,
+#                station skew elsewhere (only 16 states have a lookup entry)
+# Regional / weighted skew columns are written either way.
+_SKEW_METHOD = "station"
+
 
 # ---------------------------------------------------------------------------
 # Qualification-code parsing
@@ -579,12 +586,14 @@ def _apply_weighted_skew(
     flood_stages: pd.DataFrame,
     site_info: pd.DataFrame,
     regional_skew: pd.DataFrame,
+    skew_method: str = _SKEW_METHOD,
 ) -> pd.DataFrame:
-    """Add B17C weighted skew columns and recompute threshold AEPs.
+    """Add B17C weighted skew columns and set the skew used downstream.
 
-    Joins result → site_info (state_cd) → regional_skew (G_r, MSE_r), then
-    computes the inverse-variance weighted skew (B17C Eq. 4-3) and updates the
-    threshold AEP / return-period columns to use G_w instead of station skew.
+    Joins result → site_info (state_cd) → regional_skew (G_r, MSE_r) and
+    computes the inverse-variance weighted skew (B17C Eq. 4-3).  With
+    skew_method="weighted" the threshold AEP / return-period columns are
+    recomputed using G_w; with "station" they keep the at-site EMA skew.
 
     New columns added to result:
         <level>_return_period_lb_yr — lower bound on the return period where
@@ -592,11 +601,16 @@ def _apply_weighted_skew(
         regional_skew_g    — G_r from state lookup (NaN if state not matched)
         mse_regional_g     — MSE of G_r (NaN if state not matched)
         mse_station_skew   — MSE of station skew from Wallis et al. formula
-        lp3_weighted_skew  — B17C Eq. 4-3 weighted skew G_w
+                             (every site with a finite skew and n_peaks >= 3)
+        lp3_weighted_skew  — B17C Eq. 4-3 weighted skew G_w (equals lp3_skew
+                             where regional_skew_g is NaN)
+        lp3_skew_used      — skew behind the AEP / return-period columns and
+                             standard quantiles (lp3_skew or lp3_weighted_skew)
 
-    lp3_skew is preserved unchanged (station skew from EMA, diagnostic use).
-    Threshold AEP / return-period columns are recomputed using G_w.
+    lp3_skew is preserved unchanged (station skew from EMA).
     """
+    if skew_method not in ("station", "weighted"):
+        raise ValueError(f"skew_method must be 'station' or 'weighted', got {skew_method!r}")
     result = result.copy()
 
     # --- Join state and regional skew ---
@@ -637,41 +651,46 @@ def _apply_weighted_skew(
         g_r = getattr(row, "regional_skew_g", np.nan)
         v_r = getattr(row, "mse_regional_g", np.nan)
 
-        if not (np.isfinite(g_s) and n >= 3 and np.isfinite(g_r) and np.isfinite(v_r) and v_r > 0):
+        v_s = _mse_station_skew(g_s, n) if (np.isfinite(g_s) and n >= 3) else np.nan
+        mse_stations.append(v_s)
+
+        if not (np.isfinite(v_s) and np.isfinite(g_r) and np.isfinite(v_r) and v_r > 0):
             weighted_skews.append(g_s)   # fall back to station skew
-            mse_stations.append(np.nan)
             continue
 
-        v_s = _mse_station_skew(g_s, n)
         g_w = (v_r * g_s + v_s * g_r) / (v_r + v_s)
         weighted_skews.append(g_w)
-        mse_stations.append(v_s)
 
     result["mse_station_skew"]  = mse_stations
     result["lp3_weighted_skew"] = weighted_skews
+    result["lp3_skew_used"] = (
+        result["lp3_weighted_skew"] if skew_method == "weighted" else result["lp3_skew"]
+    )
 
-    # --- Recompute threshold AEPs using weighted skew ---
-    # Bring in the original threshold flow values so we can re-evaluate AEPs.
     flows = flood_stages[["site_no"] + _THRESHOLD_FLOWS].set_index("site_no")
     flood_stages_idx = flood_stages.set_index("site_no")
     result = result.set_index("site_no")
-    for lvl, flow_col in zip(_LEVELS, _THRESHOLD_FLOWS):
-        aep_col = f"{lvl}_aep"
-        rp_col  = f"{lvl}_return_period_yr"
-        new_aeps, new_rps = [], []
-        for site_no, row in result.iterrows():
-            g_w   = row.get("lp3_weighted_skew", np.nan)
-            loc   = row.get("lp3_loc", np.nan)
-            scale = row.get("lp3_scale", np.nan)
-            flow  = flows.at[site_no, flow_col] if site_no in flows.index else np.nan
-            if np.isfinite(g_w) and np.isfinite(loc) and np.isfinite(scale):
-                aep, rp = _threshold_stats(flow, g_w, loc, scale)
-            else:
-                aep, rp = np.nan, np.nan
-            new_aeps.append(aep)
-            new_rps.append(rp)
-        result[aep_col] = new_aeps
-        result[rp_col]  = new_rps
+
+    # --- Recompute threshold AEPs using weighted skew ---
+    # The fit worker already evaluated them with station skew.
+    if skew_method == "weighted":
+        for lvl, flow_col in zip(_LEVELS, _THRESHOLD_FLOWS):
+            aep_col = f"{lvl}_aep"
+            rp_col  = f"{lvl}_return_period_yr"
+            new_aeps, new_rps = [], []
+            for site_no, row in result.iterrows():
+                g_w   = row.get("lp3_skew_used", np.nan)
+                loc   = row.get("lp3_loc", np.nan)
+                scale = row.get("lp3_scale", np.nan)
+                flow  = flows.at[site_no, flow_col] if site_no in flows.index else np.nan
+                if np.isfinite(g_w) and np.isfinite(loc) and np.isfinite(scale):
+                    aep, rp = _threshold_stats(flow, g_w, loc, scale)
+                else:
+                    aep, rp = np.nan, np.nan
+                new_aeps.append(aep)
+                new_rps.append(rp)
+            result[aep_col] = new_aeps
+            result[rp_col]  = new_rps
 
     # --- Return-period lower bound for thresholds above the rating table ---
     # The threshold flow is unknown there but exceeds the flow at the top of
@@ -684,12 +703,12 @@ def _apply_weighted_skew(
             if (src_col in flood_stages.columns and _RATING_MAX_FLOW in flood_stages.columns
                     and site_no in flows.index
                     and flood_stages_idx.at[site_no, src_col] == "above_rating"):
-                g_w   = row.get("lp3_weighted_skew", np.nan)
+                g     = row.get("lp3_skew_used", np.nan)
                 loc   = row.get("lp3_loc", np.nan)
                 scale = row.get("lp3_scale", np.nan)
-                if np.isfinite(g_w) and np.isfinite(loc) and np.isfinite(scale):
+                if np.isfinite(g) and np.isfinite(loc) and np.isfinite(scale):
                     _, lb = _threshold_stats(
-                        flood_stages_idx.at[site_no, _RATING_MAX_FLOW], g_w, loc, scale
+                        flood_stages_idx.at[site_no, _RATING_MAX_FLOW], g, loc, scale
                     )
             lbs.append(lb)
         result[f"{lvl}_return_period_lb_yr"] = lbs
@@ -801,6 +820,7 @@ def compute_flood_frequency(
     out_path: Path,
     min_peaks: int = _MIN_PEAKS,
     refetch: bool = False,
+    skew_method: str = _SKEW_METHOD,
 ) -> pd.DataFrame:
     """Fetch annual peak flows and fit LP3 (EMA) for all sites with defined
     flood flow thresholds.
@@ -817,6 +837,8 @@ def compute_flood_frequency(
     refetch : bool
         If False (default) and annual_peaks.parquet already exists in out_path,
         skip the NWIS fetch and reuse the cached file.
+    skew_method : {"station", "weighted"}
+        Skew behind the threshold AEPs and lp3_skew_used (see _SKEW_METHOD).
 
     Returns
     -------
@@ -835,6 +857,7 @@ def compute_flood_frequency(
                                        EMA uses a per-observation threshold)
     high_censoring           : bool  — >25 % of effective record is censored (code 4/8 + PILF)
     record_ok                : bool  — n_peaks >= min_peaks
+    lp3_skew_used            : float — skew behind the AEP / return-period columns
     degenerate_fit           : bool  — EMA diverged (loc<0.5 | scale>2 | |skew|>3)
     <level>_return_period_lb_yr : float — lower bound on the return period,
                                        set only where the threshold stage is
@@ -948,11 +971,12 @@ def compute_flood_frequency(
         regional_skew = pd.DataFrame(
             columns=["state_cd", "regional_skew_g", "mse_regional_g"]
         )
-    result = _apply_weighted_skew(result, fs, site_info, regional_skew)
+    result = _apply_weighted_skew(result, fs, site_info, regional_skew, skew_method)
     n_weighted = int(result["regional_skew_g"].notna().sum())
     logger.info(
-        "Weighted skew applied: %d/%d sites matched a regional skew study",
-        n_weighted, len(result),
+        "Skew method '%s'; weighted skew computed for %d/%d sites matched to a "
+        "regional skew study",
+        skew_method, n_weighted, len(result),
     )
 
     # Flag degenerate EMA solutions caused by extreme censoring or data issues.

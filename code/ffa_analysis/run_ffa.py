@@ -7,9 +7,11 @@ annual peak flows, fits Log-Pearson Type III distributions, and writes:
   data/flood_frequency.parquet
 
 Usage:
-  python run_ffa.py
+  python run_ffa.py             # reuse cached annual_peaks.parquet
+  python run_ffa.py --refetch   # re-download NWIS peaks for every site
 """
 
+import argparse
 import logging
 import sys
 import pandas as pd
@@ -37,6 +39,11 @@ from compute_change_analysis import compute_change_analysis
 
 
 def main():
+    ap = argparse.ArgumentParser(description="Flood frequency analysis (LP3 / EMA).")
+    ap.add_argument("--refetch", action="store_true",
+                    help="re-download NWIS annual peaks instead of using the cache")
+    args = ap.parse_args()
+
     logger.info("Flood Frequency Analysis")
     logger.info("  Input : %s", NWIS_META)
     logger.info("  Output: %s", DATA_DIR)
@@ -44,6 +51,7 @@ def main():
     ffa_df = compute_flood_frequency(
         flood_stages_path=NWIS_META,
         out_path=DATA_DIR,
+        refetch=args.refetch,
     )
 
     logger.info("Computing standard quantiles …")
