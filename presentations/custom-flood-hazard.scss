@@ -1,0 +1,137 @@
+/*-- scss:defaults --*/
+
+// Adapted from CONUS-drought-archetypes/presentations/custom-streamflow-drought.scss.
+// Fonts: titles and headings in IBM Plex Sans, body text and code in Roboto Mono.
+// To swap, change the Google Fonts URL and the family names below.
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=Roboto+Mono:ital,wght@0,400;0,600;1,400&display=swap');
+
+$font-family-sans-serif: "Roboto Mono", "Courier New", monospace;   // body text
+$font-family-monospace: "Roboto Mono", monospace;                   // code
+$presentation-heading-font: "IBM Plex Sans", Arial, sans-serif;     // titles and headings
+$presentation-heading-text-transform: none;
+
+// Return-period classes, as in the maps (code/ffa_analysis/make_rp_maps.py COLORS):
+// pale = frequent, dark = rare
+$rp-lt2:    #fcea7f;   // < 2 yr
+$rp-2-5:    #8fd181;   // 2–5 yr
+$rp-5-10:   #00ab96;   // 5–10 yr
+$rp-10-25:  #007a9c;   // 10–25 yr
+$rp-25-100: #1a4386;   // 25–100 yr
+$rp-ge100:  #2f0b54;   // ≥ 100 yr
+
+// Base colors
+$ink: #1f2328;
+$muted: #6b7078;
+$paper: #fcfcfb;     // the maps' land fill, so figures sit flush on the slide
+$panel: #f1f0ec;
+$accent: $rp-10-25;  // LP3 curve color in the example-site figure
+
+$body-bg: $paper;
+$body-color: $ink;
+$link-color: $rp-25-100;
+$presentation-heading-color: $ink;
+
+// Sizes (everything scales from the root size)
+$presentation-font-size-root: 32px;
+$presentation-h1-font-size: 2.2em;
+$presentation-h2-font-size: 1.45em;
+$presentation-h3-font-size: 1.1em;
+$code-block-font-size: 0.55em;
+
+/*-- scss:rules --*/
+
+// Thin accent rule under slide titles
+.reveal h2 {
+  padding-bottom: 0.15em;
+  border-bottom: 3px solid $accent;
+  // Block-level so content always starts below the title; fit-content keeps the rule as wide as the text
+  display: block;
+  width: fit-content;
+}
+
+// Title slide
+.reveal .quarto-title-block .title { color: $ink; }
+.reveal .quarto-title-block .subtitle { color: $muted; font-style: italic; }
+.reveal .quarto-title-block .quarto-title-author-name { color: $accent; font-weight: 600; }
+// Shift the title-slide block up (more negative = higher)
+.reveal #title-slide { margin-top: -190px; }
+
+// Chapter slides (# headings)
+.reveal .slide.level1 h1 {
+  text-align: left;
+  position: relative;
+  top: -190px;   // vertical shift: negative = higher, positive = lower
+}
+
+// Return-period classes in text, as filled chips in the map colors: [42.3 yr]{.rp-25-100}
+// (the pale classes are unreadable as text color, so every class is a fill; dark text on the
+// light fills, light text on the dark ones)
+.reveal .rp-lt2, .reveal .rp-2-5, .reveal .rp-5-10,
+.reveal .rp-10-25, .reveal .rp-25-100, .reveal .rp-ge100 {
+  font-weight: 600; padding: 0 0.25em; border-radius: 3px;
+}
+.reveal .rp-lt2    { background: $rp-lt2;    color: $ink; }
+.reveal .rp-2-5    { background: $rp-2-5;    color: $ink; }
+.reveal .rp-5-10   { background: $rp-5-10;   color: $ink; }
+.reveal .rp-10-25  { background: $rp-10-25;  color: $paper; }
+.reveal .rp-25-100 { background: $rp-25-100; color: $paper; }
+.reveal .rp-ge100  { background: $rp-ge100;  color: $paper; }
+.reveal .accent    { color: $accent;    font-weight: 600; }
+
+// reveal.js makes lists inline-block, so each list sits on its own line box and picks up extra
+// line-height space. With a fixed first bullet followed by ::: {.incremental} (two lists), that
+// shows as a larger gap between them. Block lists stack flush, matching the within-list spacing.
+.reveal .slide ul, .reveal .slide ol { display: block; }
+
+// Small print and captions
+.reveal .small { font-size: 0.6em; color: $muted; }
+
+// One-line takeaway box: ::: {.takeaway}
+.reveal .takeaway {
+  margin-top: 0.6em;
+  padding: 0.35em 0.7em;
+  border-left: 6px solid $accent;
+  background: $panel;
+  font-size: 0.75em;
+}
+
+// Tables: compact, light rules
+.reveal table { font-size: 0.7em; }
+// Fit tables to their contents (Pandoc otherwise forces width:100% with fixed column widths)
+.reveal table { width: auto !important; margin: 0.5em auto; }
+.reveal table col { width: auto !important; }
+.reveal table th { border-bottom: 2px solid $ink; }
+.reveal table td { border-bottom: 1px solid #e3e0dc; }
+
+// Columns: side by side, vertically centered (text sits beside a figure, not at its top or below it)
+.reveal .columns { display: flex; align-items: center; gap: 1em; }
+.reveal .columns > .column { flex-shrink: 1; min-width: 0; }
+.reveal .columns img { max-width: 100%; object-fit: contain; }
+
+// Stand-alone figures: reveal's r-stretch sets the height; keep the aspect ratio when width is also set
+.reveal img.r-stretch { object-fit: contain; }
+
+// Big-number slide: ## {.big-number}
+.reveal .slide.big-number p { font-size: 1.6em; text-align: center; }
+
+// Dark section-break slide: ## Section {.section-break background-color="#1f2328"}
+.reveal .slide.section-break h2 {
+  color: $paper;
+  border-bottom-color: $rp-lt2;
+}
+
+// Footer and slide number
+.reveal .footer { color: $muted; font-size: 0.45em; }
+.reveal .slide-number { color: $muted; background: transparent; }
+.reveal .slide-logo { max-height: 1.3rem !important; }
+// Logo and slide number both bottom right, logo to the left of the number.
+// Quarto moves the slide number to the top when a logo is present, so override that.
+.reveal .slide-logo { right: 70px !important; bottom: 6px !important; }
+// !important because Quarto's footer.css loads after the theme with the same selector
+.reveal.has-logo .slide-number { top: auto !important; bottom: 10px !important; right: 10px !important; }
+// Extra logos bottom left, from logos.html (include-after-body)
+.reveal .extra-logos {
+  position: fixed; left: 60px; bottom: 6px !important; z-index: 30;
+  display: flex; gap: 14px; align-items: center;
+}
+.reveal .extra-logos img { max-height: 3rem !important; width: auto; margin: 0; }

@@ -18,8 +18,9 @@ Return periods use lp3_skew_used (station skew; see compute_flood_frequency).
 Usage:
   python make_rp_maps.py               # QC = record_ok & ~degenerate_fit
   python make_rp_maps.py --ppcc        # additionally require ppcc_ok
+  python make_rp_maps.py --regulation unregulated   # or: regulated
 
-Writes rp_maps_conus.{png,pdf} to FIG_DIR.
+Writes rp_maps_conus[_ppcc][_<regulation>].{png,pdf} to FIG_DIR.
 """
 
 import argparse
@@ -106,9 +107,24 @@ def _conus_geoms():
     ]
 
 
-def load_sites(apply_ppcc: bool) -> pd.DataFrame:
+# Regulation subsets, from regulation.parquet's is_regulated (moderate or major:
+# degree of regulation >= 0.10, escalated by NWIS peak codes 5/6; see
+# compute_regulation.py).  Sites without a regulation profile fall in neither.
+REGULATION = {
+    "all": None,
+    "unregulated": ("Unregulated gages", False),
+    "regulated": ("Regulated gages", True),
+}
+
+
+def load_sites(apply_ppcc: bool, regulation: str = "all") -> pd.DataFrame:
     ffa = pd.read_parquet(FFA_DIR / "flood_frequency.parquet")
     qc = ffa["record_ok"] & ~ffa["degenerate_fit"]
+    if REGULATION[regulation] is not None:
+        reg = pd.read_parquet(META_DIR / "regulation.parquet",
+                              columns=["site_no", "is_regulated"]).drop_duplicates("site_no")
+        ffa = ffa.merge(reg, on="site_no", how="left")
+        qc &= ffa["is_regulated"].eq(REGULATION[regulation][1])
     if apply_ppcc:
         ppcc = pd.read_parquet(FFA_DIR / "ppcc.parquet", columns=["site_no", "ppcc_ok"])
         ffa = ffa.merge(ppcc, on="site_no", how="left")
@@ -218,6 +234,18 @@ def draw_panel(ax, sites: pd.DataFrame, level: str, title: str, geoms,
     draw_hist(ax, pts, bnd, hist_ymax)
 
 
+def subset_suffix(regulation: str) -> str:
+    return "" if regulation == "all" else f"_{regulation}"
+
+
+def label_subset(fig, regulation: str, n_sites: int) -> None:
+    """Name the subset top right, so a single figure is never mistaken for all gages."""
+    if REGULATION[regulation] is None:
+        return
+    fig.text(0.99, 0.995, f"{REGULATION[regulation][0]} · {n_sites:,} QC sites",
+             ha="right", va="top", fontsize=7, color=INK_2)
+
+
 def legend_handles():
     swatch = [
         Line2D([], [], marker="o", linestyle="none", markersize=4.5,
@@ -243,10 +271,11 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1].strip())
     ap.add_argument("--ppcc", action="store_true",
                     help="also require the PPCC goodness-of-fit test to pass")
+    ap.add_argument("--regulation", choices=list(REGULATION), default="all")
     ap.add_argument("--out", type=Path, default=FIG_DIR)
     args = ap.parse_args()
 
-    sites = load_sites(args.ppcc)
+    sites = load_sites(args.ppcc, args.regulation)
     geoms = _conus_geoms()
 
     fig, axes = plt.subplots(2, 2, figsize=(7.0, 4.9),
@@ -275,7 +304,8 @@ def main() -> None:
     fig.subplots_adjust(left=0.01, right=0.99, top=0.96, bottom=0.11)
 
     args.out.mkdir(parents=True, exist_ok=True)
-    stem = "rp_maps_conus" + ("_ppcc" if args.ppcc else "")
+    label_subset(fig, args.regulation, len(sites))
+    stem = "rp_maps_conus" + ("_ppcc" if args.ppcc else "") + subset_suffix(args.regulation)
     for ext in ("png", "pdf"):
         fig.savefig(args.out / f"{stem}.{ext}", facecolor="white")
     print(f"QC sites: {len(sites):,} → {args.out / stem}.{{png,pdf}}")

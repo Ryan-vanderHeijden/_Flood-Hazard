@@ -18,8 +18,9 @@ hatched, like the lower-bound tops of the site-map histograms.
 Usage:
   python make_rp_hexmaps.py                    # 150 km hexagons
   python make_rp_hexmaps.py --hex-km 200 --ppcc
+  python make_rp_hexmaps.py --regulation regulated  # or: unregulated
 
-Writes rp_hexmaps_conus_<km>km.{png,pdf} to FIG_DIR.
+Writes rp_hexmaps_conus_<km>km[_ppcc][_<regulation>].{png,pdf} to FIG_DIR.
 """
 
 import argparse
@@ -35,7 +36,8 @@ from matplotlib.patches import Patch, RegularPolygon
 
 from make_rp_maps import (
     COLORS, CONUS_EXTENT, DOT_EDGE, FIG_DIR, HATCH, HATCH_INK, INK_2, LAND,
-    LABELS, LEVELS, NORM, PROJ, STATE, TITLE_FONT, _conus_geoms, km_median, load_sites,
+    LABELS, LEVELS, NORM, PROJ, REGULATION, STATE, TITLE_FONT, _conus_geoms, km_median,
+    label_subset, load_sites, subset_suffix,
     split_sites,
 )
 
@@ -117,10 +119,11 @@ def main() -> None:
     ap.add_argument("--full-sites", type=int, default=10)
     ap.add_argument("--ppcc", action="store_true",
                     help="also require the PPCC goodness-of-fit test to pass")
+    ap.add_argument("--regulation", choices=list(REGULATION), default="all")
     ap.add_argument("--out", type=Path, default=FIG_DIR)
     args = ap.parse_args()
 
-    sites = load_sites(args.ppcc)
+    sites = load_sites(args.ppcc, args.regulation)
     xy = PROJ.transform_points(ccrs.PlateCarree(), sites["longitude"].to_numpy(),
                                sites["latitude"].to_numpy())
     sites["x"], sites["y"] = xy[:, 0], xy[:, 1]
@@ -161,7 +164,9 @@ def main() -> None:
     fig.subplots_adjust(left=0.01, right=0.99, top=0.96, bottom=0.11)
 
     args.out.mkdir(parents=True, exist_ok=True)
-    stem = f"rp_hexmaps_conus_{args.hex_km:g}km" + ("_ppcc" if args.ppcc else "")
+    label_subset(fig, args.regulation, len(sites))
+    stem = (f"rp_hexmaps_conus_{args.hex_km:g}km" + ("_ppcc" if args.ppcc else "")
+            + subset_suffix(args.regulation))
     for ext in ("png", "pdf"):
         fig.savefig(args.out / f"{stem}.{ext}", facecolor="white")
     print(f"QC sites: {len(sites):,} → {args.out / stem}.{{png,pdf}}")
