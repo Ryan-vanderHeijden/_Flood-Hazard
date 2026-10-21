@@ -19,19 +19,10 @@ convict our fit.
 peak* at the same site. By definition those are the same quantity, so this
 needs no external reference and no assumption about anyone's method. It is the
 check that isolates fit failures from ordinary methodological disagreement, and
-it covers the ~40% of sites with no published estimate to compare against.
+it covers the ~46% of QC sites with no published estimate to compare against.
 
 Writes ``data/ffa/streamstats_validation.parquet`` — one row per site, holding
 both checks plus the record and fit descriptors needed to stratify them.
-
-**Known issue this validation found.** The report is currently dominated by a
-peak-code mapping error in ``compute_flood_frequency.py``: NWIS code 6 is
-"Discharge affected by Regulation or Diversion", but the fitting code treats it
-as a left-censored observation. That collapses the lower tail at every site with
-code-6 peaks and accounts for 94% of the total squared Q2 error against the
-published estimates. See ``code/ffa_analysis/peak_cd_notes.md``. Until the
-mapping is fixed and the pipeline re-run, read the Q2 row of the external table
-as a measurement of that defect rather than of the method.
 
     python code/ffa_analysis/src/validate_against_streamstats.py
 """
