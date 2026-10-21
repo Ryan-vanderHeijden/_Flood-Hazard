@@ -61,7 +61,7 @@ Goal: the annual exceedance probability (AEP) of every NWS threshold at every ga
 | **LP3 fit passes QC** (≥ 10 peaks, non-degenerate) | NWIS annual peaks | **3,312** |
 
 ::: {.small}
-Threshold stages and flows from the NWPS API; NWM reach IDs from NWPS, with the USGS NLDI as a fallback (6,604 of 6,605 gages). Median record among QC sites: 72 years (IQR 47–89).
+Threshold stages and flows from the NWPS API; NWM reach IDs from NWPS, with the USGS NLDI as a fallback (6,604 of 6,605 gages). Median systematic record among QC sites: 74 years (IQR 48–90).
 :::
 
 ## Threshold stages become flows
@@ -111,6 +111,20 @@ At the major level, 30% of thresholds are above the rating, and they are the rar
 | Code 5 / 6 (regulation) | kept as observed |
 :::
 ::::
+
+## Period of record
+![](figures/record_timeline.png){fig-align="center" height="800"}
+
+::: {.small}
+Systematic years exclude code-1 (daily mean) peaks; code-7 historical peaks enter the EMA through their historical period.
+:::
+
+## Where records are long and short
+![](figures/record_length_map.png){fig-align="center" height="690"}
+
+::: {.takeaway .fragment}
+74% of sites have at least 50 years of record and 96% run through 2024 or later. Short records cluster in the Southeast Piedmont and the Mid-Atlantic.
+:::
 
 ## Station skew for all of CONUS
 :::: {.columns}
@@ -185,6 +199,13 @@ Coverage follows state USGS reports and skips regulated gages often.
 
 ::: {.takeaway .fragment}
 Lower bounds (hatched) are a small share at action and minor; at major they are a third of the 25–100 yr bar and nearly half of the ≥ 100 yr bar.
+:::
+
+## How far beyond the record?
+![](figures/record_vs_rp.png){fig-align="center" width="100%"}
+
+::: {.takeaway .fragment}
+At least 32% of major thresholds have return periods longer than the record behind them: those rest on the LP3 tail, not on observed floods.
 :::
 
 ## Lower bounds change the answer
