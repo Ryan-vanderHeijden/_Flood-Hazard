@@ -10,7 +10,7 @@
   <meta name="generator" content="quarto-1.10.18">
 
   <meta name="author" content="Ryan van der Heijden">
-  <meta name="dcterms.date" content="2026-10-20">
+  <meta name="dcterms.date" content="2026-10-21">
   <title>How rare are NWS flood thresholds?</title>
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -145,7 +145,7 @@ Ryan van der Heijden
 </div>
 </div>
 
-  <p class="date">2026-10-20</p>
+  <p class="date">2026-10-21</p>
 </section>
 <section>
 <section id="chapter-1-question-and-data" class="title-slide slide level1 center">
@@ -245,7 +245,7 @@ Ryan van der Heijden
 </tbody>
 </table>
 <div class="small">
-<p>Threshold stages and flows from the NWPS API; NWM reach IDs from NWPS, with the USGS NLDI as a fallback (6,604 of 6,605 gages). Median record among QC sites: 72 years (IQR 47–89).</p>
+<p>Threshold stages and flows from the NWPS API; NWM reach IDs from NWPS, with the USGS NLDI as a fallback (6,604 of 6,605 gages). Median systematic record among QC sites: 74 years (IQR 48–90).</p>
 </div>
 </section>
 <section id="threshold-stages-become-flows" class="slide level2">
@@ -354,6 +354,28 @@ Ryan van der Heijden
 </tbody>
 </table>
 </div></div>
+</section>
+<section id="period-of-record" class="slide level2">
+<h2>Period of record</h2>
+<div class="quarto-figure quarto-figure-center">
+<figure>
+<p><img data-src="figures/record_timeline.png" class="quarto-figure quarto-figure-center" height="800"></p>
+</figure>
+</div>
+<div class="small">
+<p>Systematic years exclude code-1 (daily mean) peaks; code-7 historical peaks enter the EMA through their historical period.</p>
+</div>
+</section>
+<section id="where-records-are-long-and-short" class="slide level2">
+<h2>Where records are long and short</h2>
+<div class="quarto-figure quarto-figure-center">
+<figure>
+<p><img data-src="figures/record_length_map.png" class="quarto-figure quarto-figure-center" height="690"></p>
+</figure>
+</div>
+<div class="takeaway fragment">
+<p>74% of sites have at least 50 years of record and 96% run through 2024 or later. Short records cluster in the Southeast Piedmont and the Mid-Atlantic.</p>
+</div>
 </section>
 <section id="station-skew-for-all-of-conus" class="slide level2">
 <h2>Station skew for all of CONUS</h2>
@@ -500,6 +522,13 @@ Ryan van der Heijden
 
 <img data-src="figures/rp_histograms.png" class="quarto-figure quarto-figure-center r-stretch" style="width:100.0%"><div class="takeaway fragment">
 <p>Lower bounds (hatched) are a small share at action and minor; at major they are a third of the 25–100 yr bar and nearly half of the ≥ 100 yr bar.</p>
+</div>
+</section>
+<section id="how-far-beyond-the-record" class="slide level2">
+<h2>How far beyond the record?</h2>
+
+<img data-src="figures/record_vs_rp.png" class="quarto-figure quarto-figure-center r-stretch" style="width:100.0%"><div class="takeaway fragment">
+<p>At least 32% of major thresholds have return periods longer than the record behind them: those rest on the LP3 tail, not on observed floods.</p>
 </div>
 </section>
 <section id="lower-bounds-change-the-answer" class="slide level2">
