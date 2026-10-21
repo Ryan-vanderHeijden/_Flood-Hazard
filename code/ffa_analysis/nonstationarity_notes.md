@@ -224,6 +224,32 @@ return period matches within ±10% at 74% (median ratio 1.00). The largest-dam r
 keeps more record and is easier to explain. The 90% rule removes more trends, because
 storage that keeps growing after the largest dam still changes the peaks.
 
+## Figures and tables
+
+`make_nonstationarity_figures.py` writes the `change_attribution` and
+`post_cutoff_refits` figures to `figures/`, and CSVs plus
+`nonstationarity_tables.md` to `~/data/flood_hazard/tables/`.
+
+**Headline: the regulation result in the deck was an artifact of non-stationary
+records.** Kaplan–Meier medians (yr), lower bounds treated as censored:
+
+| Level | Unregulated | Regulated, full record | Regulated, present day |
+|---|---:|---:|---:|
+| Action | 1.5 | 2.0 | 2.1 |
+| Minor | 2.9 | 3.9 | 4.3 |
+| Moderate | 10.3 | 10.4 | 12.6 |
+| Major | 48.8 | 37.4 | **50.5** |
+
+Under present-day fits, regulated gages reach major flood stage about as often as
+unregulated ones (50.5 vs 48.8 yr), not more often (37.4). Full-record fits include
+pre-dam floods that the reservoirs now prevent. Action and minor stay rarer at
+regulated gages.
+
+Change-point causes: 113 dam completed near the change, 147 storage built with the
+change later, 47 urbanizing basin, 100 no identified cause. The 65 unregulated
+sites with no identified cause have more irrigated agriculture than the control
+(0.52% vs 0.09%), which could point to irrigation or groundwater pumping.
+
 ## Next steps
 
 1. **Attribution:** join dam completion years from the National Inventory of Dams
