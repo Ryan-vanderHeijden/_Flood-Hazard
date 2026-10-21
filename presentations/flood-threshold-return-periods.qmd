@@ -248,8 +248,9 @@ Kaplan–Meier medians, lower bounds treated as right-censored. Sites: 1,757 unr
 ::: {.column width="50%"}
 ::: {.incremental}
 - At regulated gages, action and minor stages are reached **less often**, consistent with reservoirs absorbing small floods
-- Major stages are reached **more often** at regulated gages (37 vs 49 years)
+- Major stages *appear* to be reached **more often** at regulated gages (37 vs 49 years)
 - But the groups sit in different places: regulated gages cluster in the Plains, Texas and the West, unregulated ones in the East and Midwest
+- And many regulated records span the dam era: Chapter 4 tests whether they are stationary
 :::
 :::
 ::::
@@ -292,13 +293,80 @@ Kaplan–Meier medians, lower bounds treated as right-censored. Sites: 1,757 unr
 Thresholds above the rating table have no flow and drop out of this comparison, so the major figure leans low.
 ::: -->
 
+# Chapter 4: Non-stationarity
+
+## Are the peak records stationary?
+![](figures/peak_trends.png){fig-align="center" height="760"}
+
+::: {.takeaway .fragment}
+24% of regulated gages show a significant trend or step change, mostly downward around 1975, against 10% of unregulated gages.
+:::
+
+## What caused the changes?
+![](figures/change_attribution.png){fig-align="center" width="100%"}
+
+::: {.small}
+NID dams placed in GAGES-II basins. "Dam completed near the change": dams finished up to 5 years before the change add storage ≥ 5% of mean annual runoff (3× the chance rate). "Storage built, change later": basins with more canals and irrigated agriculture, consistent with diversions.
+:::
+
+## Refitting regulated gages on the present-day record
+:::: {.columns}
+::: {.column width="40%"}
+- Bulletin 17C: fit the record under **present-day** regulation
+- Cutoff: the later of the largest upstream dam's completion and the first code-6 (regulation or diversion) peak; Pettitt year as fallback
+- Refit where ≥ 30 years remain: **833** of 1,440 regulated gages
+
+::: {.fragment}
+- Trends left after the cutoff: 62 sites, flagged as gradual change
+:::
+:::
+::: {.column width="60%"}
+| Cutoff source | Refit | < 30 yr left |
+|---|---:|---:|
+| Largest dam completed | 697 | 68 |
+| Code-6 onset | 103 | 35 |
+| Pettitt change year | 33 | 15 |
+| No cutoff needed | 489 | |
+:::
+::::
+
+## Present-day return periods are longer
+![](figures/post_cutoff_refits.png){fig-align="center" width="100%"}
+
+::: {.takeaway .fragment}
+Where the record changed, the present-day major return period is 2.25× the full-record one at the median gage: the full record counts floods the dams now prevent.
+:::
+
+## Regulation, revisited
+:::: {.columns}
+::: {.column width="55%"}
+| Level | Unregulated | Regulated, full record | Regulated, present day |
+|---|---:|---:|---:|
+| Action | [1.5 yr]{.rp-lt2} | [2.0 yr]{.rp-lt2} | [2.1 yr]{.rp-2-5} |
+| Minor | [2.9 yr]{.rp-2-5} | [3.9 yr]{.rp-2-5} | [4.3 yr]{.rp-2-5} |
+| Moderate | [10.3 yr]{.rp-10-25} | [10.4 yr]{.rp-10-25} | [12.6 yr]{.rp-10-25} |
+| Major | [48.8 yr]{.rp-25-100} | [37.4 yr]{.rp-25-100} | [50.5 yr]{.rp-25-100} |
+
+::: {.small}
+Kaplan–Meier medians, lower bounds right-censored. Present day: post-cutoff fits at the 830 refit gages, full-record fits elsewhere.
+:::
+:::
+::: {.column width="45%"}
+::: {.incremental}
+- Action and minor: still reached **less often** at regulated gages
+- Major: the apparent difference **disappears** (50.5 vs 48.8 years)
+- The full-record result mixed pre- and post-dam floods
+:::
+:::
+::::
+
 ## Takeaways
 ::: {.incremental}
 - NWS levels step up in rarity: **1.7 → 3.3 → 10 → 42 years** at the median gage
 - The spread between gages is wide: major flooding ranges from a few years to beyond 100 years
 - Regional structure is clear once gages are pooled: short return periods for action and minor across the Midwest, Plains and much of the East; longer ones in arid West
 - 30% of major thresholds sit above the rating curve and must be treated as lower bounds
-- Regulated gages reach action and minor stages less often; the major-level difference may be confounded with region
+- Regulated gages reach action and minor stages less often; at major, the apparent difference disappears once records are refit on present-day regulation
 :::
 
 ## Caveats and next steps
@@ -308,7 +376,7 @@ Thresholds above the rating table have no flow and drop out of this comparison, 
 
 - Station skew everywhere: tail quantiles noisier where regional skew exists
 - Regulated gages (47% of QC sites) likely confounded with region
-- Stationarity assumed over each record
+- Present-day refits rest on shorter records (median 58 years) and station skew
 - Above-rating thresholds known only as bounds
 :::
 ::: {.column width="50%" .fragment}
@@ -317,6 +385,6 @@ Thresholds above the rating table have no flow and drop out of this comparison, 
 - Data release of the FFA outputs
 - Uncertainty bounds on threshold return periods
 - Regulation effect within regions (e.g. by HUC2)
-- Sensitivity to record period
+- Present-day return periods and change flags in the data release
 :::
 ::::
