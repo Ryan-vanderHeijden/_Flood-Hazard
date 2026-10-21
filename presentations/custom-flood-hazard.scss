@@ -106,6 +106,8 @@ $code-block-font-size: 0.55em;
 // Columns: side by side, vertically centered (text sits beside a figure, not at its top or below it)
 .reveal .columns { display: flex; align-items: center; gap: 1em; }
 .reveal .columns > .column { flex-shrink: 1; min-width: 0; }
+// Two text columns: align their tops instead ({.columns .top})
+.reveal .columns.top { align-items: flex-start; }
 .reveal .columns img { max-width: 100%; object-fit: contain; }
 
 // Stand-alone figures: reveal's r-stretch sets the height; keep the aspect ratio when width is also set

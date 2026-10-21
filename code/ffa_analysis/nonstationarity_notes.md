@@ -224,6 +224,175 @@ return period matches within ±10% at 74% (median ratio 1.00). The largest-dam r
 keeps more record and is easier to explain. The 90% rule removes more trends, because
 storage that keeps growing after the largest dam still changes the peaks.
 
+### Refit integrity: record-shortening control (2026-10-21)
+
+Does fitting on a shorter, more recent record lengthen return periods by itself?
+
+**Control:** 1,210 unregulated sites with no significant trend or change point,
+each refit on its most recent years. Post-cutoff lengths are drawn from the real
+refits (median 49 years kept; at least 10 years dropped, at least 30 kept). The
+script is in the session scratchpad; its logic is to call `refit()` with a recent
+cutoff.
+
+| Level | Control | Regulated refits, no change detected | Regulated refits, change detected |
+|---|---:|---:|---:|
+| Action | 0.99 (longer at 42%) | 1.02 | 1.22 |
+| Minor | 0.99 (40%) | 1.03 | 1.51 |
+| Moderate | 0.97 (41%) | 1.05 | 1.89 |
+| Major | 0.93 (39%) | 1.10 | 2.25 |
+
+All values are median present-day ÷ full-record return period. Median station skew
+in the control barely moves (−0.036 → −0.023).
+
+- Shortening a stationary record does **not** lengthen return periods; it shortens
+  them slightly. The regulated increases are not a method artifact. Against the
+  control, they are, if anything, slightly understated.
+- The control's major-level P10–P90 (0.64–1.52) is the sampling noise of a
+  shortened refit. Shifts at changed sites lie far outside it.
+
+### Refit integrity: lingering trends and skew (2026-10-21)
+
+**Lingering trends.** 62 refit sites keep a significant post-cutoff trend (49 of
+them downward). Moving their cutoff to the later of the largest dam and the year
+storage reached 90% of today's:
+
+- 32 have a later 90%-storage date; 27 of those keep ≥ 30 years.
+- After refitting, 17 fall below the main run's BH threshold (p = 0.0035). The
+  median new p is 0.010, so the trend weakened rather than vanished. 10 still trend.
+- At the 17 sites, the major return period is a further 1.25× longer at the median.
+- **45 sites remain to flag as gradual change:** 10 still trending, 5 too short,
+  30 with no later storage date.
+
+**Skew sensitivity.** Present-day return periods recomputed with the post-cutoff
+location and scale but the full-record skew (median ratios):
+
+| Level | No change detected: free / fixed skew | Change detected: free / fixed skew |
+|---|---:|---:|
+| Action | 1.02 / 1.02 | 1.22 / 1.24 |
+| Minor | 1.03 / 1.05 | 1.50 / 1.53 |
+| Moderate | 1.05 / 1.09 | 1.89 / 1.93 |
+| Major | 1.10 / 1.16 | 2.32 / 2.30 |
+
+- The shifts come from the location and scale (smaller typical floods), not from
+  skew noise.
+- **The 86 extreme sites** (major ratio > 5): with the full-record skew, the median
+  ratio is 8.2, 55 stay above 5 and 82 above 2. Their skew changes by a median of
+  −0.40, against 0.18 in absolute terms across all refits. The extremes are real
+  drops in flood size, and the skew change is not what drives them.
+
+### Why change years often lag the largest dam (2026-10-21)
+
+This compares 299 regulated change points with the completion year of the largest
+upstream dam:
+
+| Change relative to the largest dam | Sites |
+|---|---:|
+| More than 2 years before | 61 |
+| 0–5 years after | 80 |
+| 6–15 years after | 31 |
+| More than 15 years after | 127 |
+
+For the 127 that come more than 15 years after:
+
+- **It is the right dam.** The largest dam alone holds DOR 0.34 at the median.
+- **The dam comes early in the record.** It was completed a median of 12 years into
+  the record. 48% are no more than 10 years in, and 29% predate the record entirely
+  (for these, the change cannot come from that dam).
+- **Pettitt places early changes late.** In synthetic 80-year series with a −0.8 sd
+  step:
+
+  | True step | Detected | Median lag of estimate | Lag > 15 yr |
+  |---|---:|---:|---:|
+  | Year 7 | 8% | +25 yr | 73% |
+  | Year 7, then continued decline | 67% | +29 yr | 89% |
+  | Year 15, then continued decline | 94% | +16 yr | 53% |
+  | Year 40 | 84% | +0 yr | 1% |
+
+  A change near the start of a record is placed decades late, especially when peaks
+  keep falling afterwards.
+- **Storage kept growing.** 58% gained DOR ≥ 0.05 from dams built between the
+  largest dam and the change.
+- **Dam modifications don't explain it.** An upstream dam was modified within
+  ±5 years of the change at 28% of these sites, against 12–26% in the other groups.
+
+**Implications**
+
+- Many "storage built, change later" sites are probably dam-driven changes that
+  Pettitt has placed late, not diversions. The attribution count of 113 is a lower
+  bound on dam-driven change.
+- Pettitt years are not reliable dates for a change early in a record. This supports
+  cutting at physical dates (dam completion, code-6 onset); Pettitt is used as the
+  fallback at only 48 sites.
+
+### Second pass built in (2026-10-21)
+
+`refit_post_cutoff.py` now refits sites still trending after the first cutoff:
+
+- **Second-pass cutoff:** the year after storage reached 90% of today's, when that is
+  later than the first cutoff and leaves ≥ 30 years.
+- **Kept** when the trend falls below the first pass's BH threshold; recorded as
+  `cutoff_source = "storage90"`, `second_pass = True`.
+- **Flagged** `gradual_change` when the site still trends.
+
+Results: 27 tried, 17 resolved, **45 flagged `gradual_change`**.
+
+Updated headline numbers:
+- Changed sites, median present-day ÷ full-record: 1.23 at action, 1.56 at minor,
+  1.99 at moderate and 2.42 at major.
+- Regulated present-day KM medians: 2.1, 4.3, 12.8 and 50.9 yr.
+
+### Flag for unrefit records (2026-10-21)
+
+`post_cutoff_fits.parquet` now covers all 1,555 regulated QC sites. The 115 with
+< 30 years (never screened) appear with `status = "short_record"`.
+
+`nonstationary_full_record` marks sites that keep a full-record fit despite evidence
+of change. Their values mix pre- and post-regulation floods; flag them, don't refit.
+
+| Reason | Sites |
+|---|---:|
+| Change detected; < 30 yr after the cutoff | 33 |
+| Change detected; no dam or code-6 date | 15 |
+| < 30 yr record; dam or code-6 date mid-record | 7 |
+| **Total** | **55** |
+
+A 20-year refit was considered and rejected: station skew from so few years is too
+noisy. Storage built during the record is now computed inside the refit script for
+every site. It matches `change_attribution.parquet` at all 1,440 screened sites
+(maximum difference ~1e-15).
+
+## Unregulated gages: recent-record refits (2026-10-21)
+
+Code: `src/refit_unregulated_recent.py` writes `ffa/unregulated_recent_fits.parquet`.
+Scope: 153 unregulated screened gages with a significant trend or step change
+(116 up, 37 down; 50 urbanizing, all up).
+
+- **Cutoff:** the Pettitt year at step sites (104). These changes fall mid-record
+  (median 1979), where Pettitt locates them well. Trend-only sites (49) use the most
+  recent 30 systematic years.
+- **Role (user decision):** urbanizing basins (≥ 20% developed) get the refit as
+  the **primary** present-day value, since Bulletin 17C treats urbanization as a
+  watershed change. The other 103 get a **sensitivity** value only.
+- **Results:** 131 refit; 22 step sites have < 30 systematic years left (median 24),
+  so they are `too_short` and flagged `nonstationary_full_record`. 1 refit is
+  degenerate.
+
+| Role | Direction | Refit | Action | Minor | Moderate | Major |
+|---|---|---:|---:|---:|---:|---:|
+| Primary (urbanizing) | up | 38 | 0.79 | 0.73 | 0.67 | 0.66 |
+| Sensitivity | up | 62 | 0.84 | 0.76 | 0.68 | 0.68 |
+| Sensitivity | down | 30 | 1.33 | 1.60 | 1.81 | 1.59 |
+
+Values are median present ÷ full-record return period. All lie well outside the
+stationary control (0.93–0.99).
+
+- **Gradual change:** only 2 sites pass BH after the cutoff, but 13 have p < 0.05,
+  10 of them in the 30-year windows. Post-cutoff power is low with 30–50 years and
+  131 tests, so treat the absence of a flag as weak evidence.
+- **Unregulated KM medians barely move** (major 48.8 → 48.8 with present-day values
+  substituted at urban sites, or at all 153). The regulated vs unregulated comparison
+  stands.
+
 ## Figures and tables
 
 `make_nonstationarity_figures.py` writes the `change_attribution` and
@@ -237,11 +406,11 @@ records.** Kaplan–Meier medians (yr), lower bounds treated as censored:
 |---|---:|---:|---:|
 | Action | 1.5 | 2.0 | 2.1 |
 | Minor | 2.9 | 3.9 | 4.3 |
-| Moderate | 10.3 | 10.4 | 12.6 |
-| Major | 48.8 | 37.4 | **50.5** |
+| Moderate | 10.3 | 10.4 | 12.8 |
+| Major | 48.8 | 37.4 | **50.9** |
 
 Under present-day fits, regulated gages reach major flood stage about as often as
-unregulated ones (50.5 vs 48.8 yr), not more often (37.4). Full-record fits include
+unregulated ones (50.9 vs 48.8 yr), not more often (37.4). Full-record fits include
 pre-dam floods that the reservoirs now prevent. Action and minor stay rarer at
 regulated gages.
 

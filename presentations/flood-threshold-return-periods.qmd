@@ -205,7 +205,7 @@ Lower bounds (hatched) are a small share at action and minor; at major they are 
 ![](figures/record_vs_rp.png){fig-align="center" width="100%"}
 
 ::: {.takeaway .fragment}
-At least 32% of major thresholds have return periods longer than the record behind them: those rest on the LP3 tail, not on observed floods.
+At least 31% of major thresholds have return periods longer than their record, historical period included: there the estimate leans increasingly on the fitted LP3 tail rather than on observed floods.
 :::
 
 ## Lower bounds change the answer
@@ -295,6 +295,32 @@ Thresholds above the rating table have no flow and drop out of this comparison, 
 
 # Chapter 4: Non-stationarity
 
+## Testing for trends and step changes
+:::: {.columns .top}
+::: {.column width="50%"}
+**Mann–Kendall: gradual trend**
+
+- Compares every pair of peaks: is the later one larger?
+- $S = \sum_{i<j} \operatorname{sgn}(x_j - x_i)$, as a $z$-score
+- Variance inflated for serial correlation (Hamed & Rao, lags 1–3)
+- Size: Sen slope of log peak, in % per decade
+:::
+::: {.column width="50%"}
+**Pettitt: abrupt step change**
+
+- Tries every split year: do peaks before and after differ?
+- $U_t = \sum_{i \le t} \sum_{j > t} \operatorname{sgn}(x_i - x_j)$, $\;K = \max_t |U_t|$
+- $p \approx 2\, e^{-6K^2 / (n^3 + n^2)}$
+- Size: change year and shift in median peak
+:::
+::::
+
+::: {.fragment}
+- Both are rank tests: no distribution assumed, robust to single large floods
+- Same peaks the LP3 fit uses; gages with ≥ 30 years (2,930)
+<!-- - Benjamini–Hochberg false discovery rate of 5% across gages: at a plain 5% level, ~150 gages would test significant by chance -->
+:::
+
 ## Are the peak records stationary?
 ![](figures/peak_trends.png){fig-align="center" height="760"}
 
@@ -311,21 +337,23 @@ NID dams placed in GAGES-II basins. "Dam completed near the change": dams finish
 
 ## Refitting regulated gages on the present-day record
 :::: {.columns}
-::: {.column width="40%"}
+::: {.column width="55%"}
 - Bulletin 17C: fit the record under **present-day** regulation
-- Cutoff: the later of the largest upstream dam's completion and the first code-6 (regulation or diversion) peak; Pettitt year as fallback
-- Refit where ≥ 30 years remain: **833** of 1,440 regulated gages
+- Cutoff: the later of the largest upstream dam and the first code-6 peak; Pettitt year as fallback
+- Refit where ≥ 30 years remain: **833** of 1,440
 
 ::: {.fragment}
-- Trends left after the cutoff: 62 sites, flagged as gradual change
+- Still trending: 62; a later cutoff (90% of storage) fixes 17, and **45 are flagged** as gradual change
+- Stationary control: shortening a record does not lengthen return periods
 :::
 :::
-::: {.column width="60%"}
+::: {.column width="45%"}
 | Cutoff source | Refit | < 30 yr left |
 |---|---:|---:|
-| Largest dam completed | 697 | 68 |
-| Code-6 onset | 103 | 35 |
+| Largest dam completed | 681 | 68 |
+| Code-6 onset | 102 | 35 |
 | Pettitt change year | 33 | 15 |
+| 90% of storage (second pass) | 17 | |
 | No cutoff needed | 489 | |
 :::
 ::::
@@ -334,7 +362,32 @@ NID dams placed in GAGES-II basins. "Dam completed near the change": dams finish
 ![](figures/post_cutoff_refits.png){fig-align="center" width="100%"}
 
 ::: {.takeaway .fragment}
-Where the record changed, the present-day major return period is 2.25× the full-record one at the median gage: the full record counts floods the dams now prevent.
+Where the record changed, the present-day major return period is 2.4× the full-record one at the median gage: the full record counts floods the dams now prevent.
+:::
+
+## Non-stationary unregulated gages
+:::: {.columns}
+::: {.column width="48%"}
+- 153 unregulated gages (10%) with a significant trend or step change, 116 of them rising
+- Cutoff: the Pettitt year at step changes; the most recent 30 years at trend-only gages
+- Urbanizing basins (≥ 20% developed): the recent-record fit becomes the **present-day** value, as for any watershed change
+- Elsewhere the cause is unattributed: kept as a **sensitivity** value
+:::
+::: {.column width="52%"}
+| Group | Refit | Moderate | Major |
+|---|---:|---:|---:|
+| Urbanizing, rising | 38 | × 0.67 | × 0.66 |
+| Other, rising | 62 | × 0.68 | × 0.68 |
+| Other, falling | 30 | × 1.81 | × 1.59 |
+
+::: {.small}
+Median present-day ÷ full-record return period. Stationary control (records shortened, no change): × 0.93–0.99.
+:::
+:::
+::::
+
+::: {.takeaway .fragment}
+In urbanizing basins, moderate and major stages are now reached about 1.5× as often as the full record implies. Across all unregulated gages, the medians do not move.
 :::
 
 ## Regulation, revisited
@@ -342,10 +395,10 @@ Where the record changed, the present-day major return period is 2.25× the full
 ::: {.column width="55%"}
 | Level | Unregulated | Regulated, full record | Regulated, present day |
 |---|---:|---:|---:|
-| Action | [1.5 yr]{.rp-lt2} | [2.0 yr]{.rp-lt2} | [2.1 yr]{.rp-2-5} |
+| Action | [1.5 yr]{.rp-lt2} | [2.0 yr]{.rp-lt2} | [2.1 yr]{.rp-lt2} |
 | Minor | [2.9 yr]{.rp-2-5} | [3.9 yr]{.rp-2-5} | [4.3 yr]{.rp-2-5} |
-| Moderate | [10.3 yr]{.rp-10-25} | [10.4 yr]{.rp-10-25} | [12.6 yr]{.rp-10-25} |
-| Major | [48.8 yr]{.rp-25-100} | [37.4 yr]{.rp-25-100} | [50.5 yr]{.rp-25-100} |
+| Moderate | [10.3 yr]{.rp-10-25} | [10.4 yr]{.rp-10-25} | [12.8 yr]{.rp-10-25} |
+| Major | [48.8 yr]{.rp-25-100} | [37.4 yr]{.rp-25-100} | [50.9 yr]{.rp-25-100} |
 
 ::: {.small}
 Kaplan–Meier medians, lower bounds right-censored. Present day: post-cutoff fits at the 830 refit gages, full-record fits elsewhere.
@@ -354,7 +407,7 @@ Kaplan–Meier medians, lower bounds right-censored. Present day: post-cutoff fi
 ::: {.column width="45%"}
 ::: {.incremental}
 - Action and minor: still reached **less often** at regulated gages
-- Major: the apparent difference **disappears** (50.5 vs 48.8 years)
+- Major: the apparent difference **disappears** (50.9 vs 48.8 years)
 - The full-record result mixed pre- and post-dam floods
 :::
 :::
@@ -376,7 +429,7 @@ Kaplan–Meier medians, lower bounds right-censored. Present day: post-cutoff fi
 
 - Station skew everywhere: tail quantiles noisier where regional skew exists
 - Regulated gages (47% of QC sites) likely confounded with region
-- Present-day refits rest on shorter records (median 58 years) and station skew
+- Present-day refits rest on shorter records (median 57 years) and station skew
 - Above-rating thresholds known only as bounds
 :::
 ::: {.column width="50%" .fragment}

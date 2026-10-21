@@ -30,10 +30,11 @@ from make_rp_maps import (
     _conus_geoms, load_sites,
 )
 
-# Diverging: blue arm = smaller peaks, warm arm = larger.  Each arm validated
+# Diverging, ordered from decrease to increase: warm arm = smaller peaks,
+# blue arm = larger (blue reads as "more water").  Each arm validated
 # as an ordinal ramp on LAND (light ends clear 2:1); the light ends separate
 # under CVD (dE 16), and triangle direction repeats the sign.
-DIV_COLORS = ["#104281", "#2a78d6", "#86b6ef", "#ef9a7a", "#d4582f", "#8f2a14"]
+DIV_COLORS = ["#8f2a14", "#d4582f", "#ef9a7a", "#86b6ef", "#2a78d6", "#104281"]
 DIV_CMAP = ListedColormap(DIV_COLORS)
 TREND_BREAKS = [-20, -10, 0, 10, 20]          # Sen slope, % per decade
 CHANGE_BREAKS = [-50, -25, 0, 25, 50]         # median after / before, %

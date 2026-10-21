@@ -22,6 +22,9 @@ nonstationarity_tables.md):
   refit_ratios         present-day ÷ full-record return period by level
   km_medians           Kaplan–Meier median return periods: unregulated,
                        regulated (full record) and regulated (present day)
+  unregulated_recent   recent-record refits at non-stationary unregulated
+                       gages (src/refit_unregulated_recent.py), by role
+                       and direction
 
 Usage:
   python make_nonstationarity_figures.py
@@ -38,7 +41,7 @@ import pandas as pd
 from matplotlib.lines import Line2D
 
 from make_rp_maps import (
-    CONUS_EXTENT, DATA_DIR, FFA_DIR, FIG_DIR, INK_2, LAND, LEVELS, PROJ, STATE,
+    CONUS_EXTENT, DATA_DIR, FFA_DIR, FIG_DIR, INK, INK_2, LAND, LEVELS, PROJ, STATE,
     TITLE_FONT, _conus_geoms, km_median, load_sites, split_sites,
 )
 
@@ -50,12 +53,13 @@ import geopandas as gpd  # noqa: E402
 TABLE_DIR = DATA_DIR / "tables"
 GAGESII_CSV = DATA_DIR / "gagesii" / "csv"
 
-# Likely cause of a significant change point.  Three categorical slots that
-# pass the all-pairs CVD check, plus "unexplained" as open light-gray markers
-# (lighter and unfilled, so it never relies on hue alone).
+# Likely cause of a significant change point.  Violet, amber and aqua: three
+# categorical slots that pass the all-pairs CVD check and stay clear of the
+# red-blue trend colormap in make_trend_maps.py, plus "unexplained" as open
+# light-gray markers (lighter and unfilled, so it never relies on hue alone).
 CAUSES = [
-    ("dam", "Dam completed near the change", "#2a78d6"),
-    ("storage_later", "Storage built, change later", "#eb6834"),
+    ("dam", "Dam completed near the change", "#6250d6"),
+    ("storage_later", "Storage built, change later", "#eda100"),
     ("urban", "Urbanizing basin (≥ 20% developed)", "#1baf7a"),
     ("unexplained", "No identified cause", "#b5b4af"),
 ]
@@ -63,7 +67,8 @@ CAUSE_COLOR = {k: c for k, _, c in CAUSES}
 CAUSE_LABEL = {k: l for k, l, _ in CAUSES}
 URBAN_DEV = 20          # % developed land (NLCD 2006) for "urbanizing"
 STORAGE_LATER_DOR = 0.10
-CHANGED = "#2a78d6"     # refit sites where the screen found a change
+CHANGED = INK           # refit sites where the screen found a change (ink, not
+                        # a hue, so it never reads as the trend colormap's blue)
 UNCHANGED = "#b5b4af"
 
 
@@ -263,13 +268,26 @@ def table_attribution(a: pd.DataFrame) -> pd.DataFrame:
 
 def table_refit_status(r: pd.DataFrame) -> pd.DataFrame:
     names = {"storage": "Largest dam completed", "code6": "Code-6 onset",
+             "storage90": "90% of storage (second pass)",
              "pettitt": "Pettitt change year", "none": "None",
-             "refit": "Refit", "too_short": "< 30 yr after cutoff", "no_cutoff": "No cutoff"}
+             "refit": "Refit", "too_short": "< 30 yr after cutoff", "no_cutoff": "No cutoff",
+             "short_record": "< 30 yr record (not screened)"}
     tab = pd.crosstab(r["cutoff_source"].map(names), r["status"].map(names),
                       margins=True, margins_name="Total")
-    tab = tab[["Refit", "< 30 yr after cutoff", "No cutoff", "Total"]]
+    tab = tab[["Refit", "< 30 yr after cutoff", "No cutoff", "< 30 yr record (not screened)",
+               "Total"]]
     tab.index.name = "Cutoff source"
     return tab.reset_index()
+
+
+def table_flags(r: pd.DataFrame) -> pd.DataFrame:
+    why = {"too_short": "Change detected; < 30 yr after cutoff",
+           "no_cutoff": "Change detected; no dam or code-6 date",
+           "short_record": "< 30 yr record; dam or code-6 date mid-record"}
+    f = r[r["nonstationary_full_record"]]
+    out = (f["status"].map(why).value_counts().rename_axis("Reason").reset_index(name="Sites"))
+    return pd.concat([out, pd.DataFrame([{"Reason": "Total", "Sites": len(f)}])],
+                     ignore_index=True)
 
 
 def table_refit_ratios(r: pd.DataFrame) -> pd.DataFrame:
@@ -286,6 +304,23 @@ def table_refit_ratios(r: pd.DataFrame) -> pd.DataFrame:
                          "Median ratio": round(q.median(), 2),
                          "P10": round(q.quantile(0.1), 2), "P90": round(q.quantile(0.9), 2),
                          "Longer (%)": round(100 * (q > 1).mean())})
+    return pd.DataFrame(rows)
+
+
+def table_unregulated(u: pd.DataFrame) -> pd.DataFrame:
+    """Recent-record refits at unregulated gages: present ÷ full RP by role and direction."""
+    r = u[(u["status"] == "refit") & ~u["post_degenerate_fit"].fillna(False).astype(bool)]
+    rows = []
+    for (role, dirn), g in r.groupby(["role", "direction"]):
+        row = {"Role": "Primary (urbanizing)" if role == "primary" else "Sensitivity",
+               "Direction": dirn, "Refit": len(g),
+               "Too short": int(((u["role"] == role) & (u["direction"] == dirn)
+                                 & (u["status"] == "too_short")).sum())}
+        for lv, title in LEVELS:
+            a, b = g[f"full_{lv}_return_period_yr"], g[f"post_{lv}_return_period_yr"]
+            ok = np.isfinite(a) & np.isfinite(b) & a.gt(0) & b.gt(0)
+            row[title] = round((b[ok] / a[ok]).median(), 2)
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -352,10 +387,16 @@ def main() -> None:
                         "urbanization indicators (medians)", table_attribution(a)),
         "refit_status": ("Post-cutoff refits at regulated gages: outcome by cutoff source",
                          table_refit_status(r)),
+        "full_record_flags": ("Regulated gages keeping a full-record fit despite evidence of "
+                              "change (nonstationary_full_record)", table_flags(r)),
         "refit_ratios": ("Present-day ÷ full-record return period at refit gages",
                          table_refit_ratios(r)),
         "km_medians": ("Kaplan–Meier median return period (yr), lower bounds censored",
                        table_km(r)),
+        "unregulated_recent": ("Recent-record refits at non-stationary unregulated gages: "
+                               "median present ÷ full-record return period",
+                               table_unregulated(pd.read_parquet(
+                                   FFA_DIR / "unregulated_recent_fits.parquet"))),
     }
     md = ["# Non-stationarity tables", "",
           "Generated by `code/ffa_analysis/make_nonstationarity_figures.py`.", ""]

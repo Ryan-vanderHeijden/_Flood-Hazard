@@ -11,8 +11,14 @@ Three figures, styled like make_rp_maps.py:
                       every site's record, sorted by first year (bottom)
   record_length_map   CONUS dots coloured by record length, inset histogram
   record_vs_rp        threshold return period against record length, one
-                      panel per level; above the 1:1 line the return period
-                      is longer than the record it is estimated from
+                      panel per level.  Record length here adds the
+                      historical period the EMA fit uses (hist_H, or the
+                      count of code-7 peaks where no period is defined, as in
+                      compute_flood_frequency's n_eff).  Above the 1:1 line
+                      the return period exceeds the record, so it leans
+                      increasingly on the fitted LP3 tail rather than on
+                      observed floods; on the line, the chance the record
+                      holds at least one such flood is about 63%
 
 Usage:
   python make_record_figures.py
@@ -187,6 +193,10 @@ def fig_length_map(sites: pd.DataFrame):
 def fig_vs_rp(sites: pd.DataFrame):
     fig, axes = plt.subplots(1, 4, figsize=(7.0, 2.5), sharex=True, sharey=True,
                              gridspec_kw={"wspace": 0.10})
+    # Effective record: systematic years plus the historical period, as the
+    # EMA fit counts it (hist_H, else one year per code-7 peak).
+    sites = sites.assign(years=sites["years"] + np.where(
+        sites["hist_H"] > 0, sites["hist_H"], sites["n_hist"]))
     xmax = sites["years"].max() * 1.05
     for ax, (level, title) in zip(axes, LEVELS):
         pts, bnd = split_sites(sites, level)
@@ -197,12 +207,12 @@ def fig_vs_rp(sites: pd.DataFrame):
                    linewidths=0, zorder=2, rasterized=True)
         ax.scatter(bnd["years"], bnd["v"], s=6, marker="^", c=bnd["v"], cmap=CMAP,
                    norm=NORM, linewidths=0, zorder=3, rasterized=True)
-        # Bounds above the line are certainly beyond the record; bounds below
-        # it could be either, so they count only toward the denominator.
+        # Bounds above the line certainly exceed the record length; bounds
+        # below it could be either, so they count only toward the denominator.
         beyond = (pts["v"] > pts["years"]).sum() + (bnd["v"] > bnd["years"]).sum()
         n = len(pts) + len(bnd)
         ax.set_title(title, loc="left", pad=11, fontdict=TITLE_FONT)
-        ax.text(0.0, 1.015, f"≥ {100 * beyond / n:.0f}% beyond the record",
+        ax.text(0.0, 1.015, f"≥ {100 * beyond / n:.0f}% exceed record length",
                 transform=ax.transAxes, ha="left", va="bottom", fontsize=6, color=INK_2)
         ax.set_yscale("log")
         ax.minorticks_off()
@@ -214,7 +224,7 @@ def fig_vs_rp(sites: pd.DataFrame):
     axes[0].set_yticks([1, 10, 100, 1000, 10000])
     axes[0].set_yticklabels(["1", "10", "100", "1,000", "10,000"])
     axes[0].set_ylabel("Return period (yr)", fontsize=6.5, color=INK_2)
-    fig.supxlabel("Years of systematic record", fontsize=6.5, color=INK_2, y=0.10)
+    fig.supxlabel("Years of record (systematic + historical period)", fontsize=6.5, color=INK_2, y=0.10)
     fig.legend(handles=[
         Line2D([], [], color=INK_2, linewidth=0.6, linestyle=(0, (3, 2)),
                label="Return period = record length"),
